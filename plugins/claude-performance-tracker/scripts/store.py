@@ -12,6 +12,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 
+import signals
 import transcript as T
 
 SOURCE = "transcript"
@@ -122,6 +123,26 @@ def finalize_run(conn: sqlite3.Connection, run_id: str, closed_by: str) -> None:
         (inp, out, cr, cc, tools, nprompts, models, first_start, last_end,
          T.duration_ms(first_start, last_end), closed_by, run_id),
     )
+
+    # Deterministic envelope: approach descriptor, output, friction, context.
+    env = signals.derive_run_envelope(conn, run_id)
+    if env:
+        conn.execute(
+            """UPDATE runs SET
+                   permission_mode = ?, subagents_used = ?, skills_used = ?,
+                   mcp_tools_used = ?, lines_added = ?, lines_removed = ?,
+                   files_touched = ?, doc_words = ?, interrupts = ?,
+                   re_prompts = ?, edits_without_read = ?, reasoning_loops = ?,
+                   premature_stops = ?, peak_context_pct = ?, compact_count = ?,
+                   clear_count = ?
+               WHERE run_id = ?""",
+            (env["permission_mode"], env["subagents_used"], env["skills_used"],
+             env["mcp_tools_used"], env["lines_added"], env["lines_removed"],
+             env["files_touched"], env["doc_words"], env["interrupts"],
+             env["re_prompts"], env["edits_without_read"], env["reasoning_loops"],
+             env["premature_stops"], env["peak_context_pct"], env["compact_count"],
+             env["clear_count"], run_id),
+        )
     conn.commit()
 
 
