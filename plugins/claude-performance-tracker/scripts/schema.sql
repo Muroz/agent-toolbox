@@ -136,3 +136,15 @@ CREATE TABLE IF NOT EXISTS open_run (
     run_id          TEXT REFERENCES runs(run_id),
     opened_at       TEXT
 );
+
+-- Maps a session to the run that owns its turns. A passive run owns exactly one
+-- session for now; a tracked run may own several (cross-session, future). Keeping
+-- this mapping separate is why `run_id` need not equal `session_id`.
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id      TEXT PRIMARY KEY,
+    run_id          TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+    transcript_path TEXT,
+    started_at      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_run ON sessions(run_id);
