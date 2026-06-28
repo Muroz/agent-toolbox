@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local runtime data (the usage DB lives in ${CLAUDE_PLUGIN_DATA}, never in-repo)
+*.db
+*.db-wal
+*.db-shm
+.claude/performance-tracker/
+
+# OS
+.DS_Store

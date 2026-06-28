@@ -1,0 +1,49 @@
+# Evaluation rubric for the usage-evaluator subagent.
+#
+# Bump `version` whenever dimensions are added/changed/removed. Every score row
+# and judge verdict is stamped with this version, so historical scores stay
+# interpretable and reports never silently compare across rubric versions.
+#
+# Dimensions are data, not code: add a new entry here to start scoring it. The
+# storage shape (scores EAV) requires no migration for new dimensions.
+
+version: "1"
+
+scale:
+  min: 0
+  max: 2
+  guidance: "0 = absent/poor, 1 = partial, 2 = clean/strong"
+
+# Scored once per run, from the run transcript.
+agent_behavior:
+  - key: ownership_dodging
+    description: >
+      Did the agent deflect responsibility, defer decisions it could make, or
+      hedge instead of acting? Lower is worse.
+  - key: unnecessary_permission_seeking
+    description: >
+      Did it ask permission for actions already authorized or trivially safe?
+  - key: reasoning_loops
+    description: >
+      Did it revisit the same dead ends or re-derive settled facts?
+  - key: blind_edits
+    description: >
+      Did it edit files it had not read, or act without gathering needed context?
+  - key: premature_stopping
+    description: >
+      Did it stop before the task was actually complete or verified?
+
+# Scored per user prompt, from the turn's prompt text + surrounding context.
+prompt_quality:
+  - key: clarity
+    description: "Is the ask unambiguous?"
+  - key: specificity
+    description: "Concrete and well-scoped vs vague?"
+  - key: context_sufficiency
+    description: "Did the user supply the files/constraints/examples needed?"
+  - key: scope
+    description: "A single bounded task vs sprawling/multi-headed?"
+  - key: success_criteria
+    description: "Is 'done' defined?"
+  - key: tone
+    description: "Neutral/constructive vs frustration. (Descriptive, not a judgment of the user.)"

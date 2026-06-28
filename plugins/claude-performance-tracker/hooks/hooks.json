@@ -1,0 +1,54 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/ingest.py\" --event SessionStart --data-dir \"${CLAUDE_PLUGIN_DATA}\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/ingest.py\" --event UserPromptSubmit --data-dir \"${CLAUDE_PLUGIN_DATA}\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/ingest.py\" --event Stop --data-dir \"${CLAUDE_PLUGIN_DATA}\""
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/ingest.py\" --event SubagentStop --data-dir \"${CLAUDE_PLUGIN_DATA}\""
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/ingest.py\" --event SessionEnd --data-dir \"${CLAUDE_PLUGIN_DATA}\""
+          }
+        ]
+      }
+    ]
+  }
+}
