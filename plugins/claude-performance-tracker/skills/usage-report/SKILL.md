@@ -12,7 +12,10 @@ Render reports from the local store. All numbers are computed at read time from 
 - `overview` — totals + per-project + per-model + time-series (tokens, prompts, wall-clock).
 - `compare` — for a `{task_type × size}` bucket, each approach's median tokens / time /
   prompts **per successful outcome**. Refuses to rank a bucket with too few samples
-  ("insufficient data, n=N") rather than crown a false winner.
+  ("insufficient data, n=N") rather than crown a false winner. Choose the approach
+  dimension with `--by model|mode|subagent|skill|effort` (default `model`), and the
+  ranking threshold with `--min N`. Only self-reported successful tracked runs are ranked;
+  inferred-success runs are flagged, never blended in.
 - `degradation` — efficiency/quality metrics over time, split by model, so "is the model
   getting worse" is a trend, not a vibe.
 - `run <id>` — full scorecard for one run plus its judge verdict.

@@ -18,10 +18,20 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
+from statistics import median
 
 import db
 
 MIN_SAMPLES = 5  # below this, comparison reports "insufficient data" rather than ranking.
+
+# Approach dimensions the compare view can group by -> runs column.
+COMPARE_DIMENSIONS = {
+    "model": "models",
+    "mode": "permission_mode",
+    "subagent": "subagents_used",
+    "skill": "skills_used",
+    "effort": "effort",
+}
 
 
 # ----- formatting helpers ---------------------------------------------------
@@ -129,6 +139,90 @@ def render_overview_for(data_dir: str | None) -> str:
         conn.close()
 
 
+def render_compare(conn: sqlite3.Connection, by: str = "model",
+                   min_samples: int = MIN_SAMPLES) -> str:
+    """Rank approaches by median cost per successful run, within each
+    {task_type x size} bucket. Only self-reported successful tracked runs are
+    ranked — inferred outcomes are never blended into the ranking, just flagged.
+    """
+    col = COMPARE_DIMENSIONS.get(by)
+    if col is None:
+        return (f"Unknown comparison dimension '{by}'. "
+                f"Choose one of: {', '.join(sorted(COMPARE_DIMENSIONS))}.")
+
+    rows = conn.execute(
+        f"""SELECT task_type, size_class, COALESCE({col}, '(none)') AS approach,
+                   output_tokens,
+                   input_tokens + output_tokens + cache_read_tokens
+                       + cache_creation_tokens AS total_tokens,
+                   num_prompts, wall_clock_ms
+            FROM runs
+            WHERE capture_mode = 'tracked' AND outcome = 'success'
+              AND outcome_source = 'self_report'
+              AND task_type IS NOT NULL AND size_class IS NOT NULL"""
+    ).fetchall()
+
+    inferred = conn.execute(
+        """SELECT COUNT(*) FROM runs
+           WHERE outcome = 'success' AND outcome_source = 'inferred'"""
+    ).fetchone()[0]
+
+    if not rows:
+        msg = ("No self-reported successful tracked runs yet. "
+               "Use /track and /track-done to record comparable runs.")
+        if inferred:
+            msg += f"\n\n({inferred} inferred-success run(s) exist but are not ranked.)"
+        return msg
+
+    # bucket -> approach -> list of run dicts
+    buckets: dict = {}
+    for r in rows:
+        b = (r[0], r[1])
+        buckets.setdefault(b, {}).setdefault(r[2], []).append(r)
+
+    parts = [f"# Approach comparison (by {by})", "",
+             "Ranked on median **total tokens per successful run** "
+             "(lower is better). Only self-reported successes count."]
+    if inferred:
+        parts.append(f"_{inferred} inferred-success run(s) excluded from ranking._")
+
+    for bucket in sorted(buckets, key=lambda b: (b[0] or "", b[1] or "")):
+        approaches = buckets[bucket]
+        n_success = sum(len(v) for v in approaches.values())
+        title = f"## {bucket[0]} · {bucket[1]}"
+        if n_success < min_samples:
+            parts += ["", f"{title} — insufficient data: {n_success} successful "
+                          f"run(s) (need ≥{min_samples} to compare)."]
+            continue
+
+        ranked = []
+        for approach, runs in approaches.items():
+            ranked.append((
+                approach, len(runs),
+                int(median([r[4] for r in runs])),   # total_tokens
+                int(median([r[3] for r in runs])),   # output_tokens
+                int(median([r[5] for r in runs])),   # num_prompts
+                median([r[6] for r in runs if r[6] is not None] or [0]),  # wall_ms
+            ))
+        ranked.sort(key=lambda x: x[2])  # by median total tokens
+        table = _table(
+            [by, "n", "med total tok", "med output tok", "med prompts", "med wall"],
+            [[a, n, _n(tt), _n(ot), _n(p),
+              (_ms(w) + (" ⚠n=1" if n < 2 else ""))]
+             for a, n, tt, ot, p, w in ranked])
+        parts += ["", f"{title}  ({n_success} successful runs)", table]
+
+    return "\n".join(parts)
+
+
+def render_compare_for(data_dir: str | None, by: str, min_samples: int) -> str:
+    conn = db.connect(data_dir)
+    try:
+        return render_compare(conn, by, min_samples)
+    finally:
+        conn.close()
+
+
 def _not_implemented(name: str) -> str:
     return f"`{name}` view is not implemented yet."
 
@@ -142,10 +236,16 @@ def main() -> int:
         "view", nargs="?", default="overview",
         choices=["overview", "compare", "degradation", "run"])
     parser.add_argument("run_id", nargs="?", default=None)
+    parser.add_argument("--by", default="model",
+                        choices=sorted(COMPARE_DIMENSIONS))
+    parser.add_argument("--min", type=int, default=MIN_SAMPLES,
+                        help="min successful runs per bucket to rank")
     args = parser.parse_args()
 
     if args.view == "overview":
         print(render_overview_for(args.data_dir))
+    elif args.view == "compare":
+        print(render_compare_for(args.data_dir, args.by, args.min))
     else:
         print(_not_implemented(args.view))
     return 0
