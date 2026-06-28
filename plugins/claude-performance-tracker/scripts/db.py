@@ -22,7 +22,11 @@ def data_dir(explicit: str | None = None) -> Path:
     """
     candidate = explicit or os.environ.get("CLAUDE_PLUGIN_DATA")
     if not candidate:
-        candidate = str(Path.home() / ".claude" / "performance-tracker")
+        # Canonical installed plugin data dir. Both the hooks (which pass
+        # ${CLAUDE_PLUGIN_DATA}) and skill-invoked scripts (which have no such
+        # env var) resolve to the same DB here.
+        candidate = str(
+            Path.home() / ".claude" / "plugins" / "data" / "claude-performance-tracker")
     path = Path(candidate)
     path.mkdir(parents=True, exist_ok=True)
     return path

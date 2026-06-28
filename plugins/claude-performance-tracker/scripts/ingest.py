@@ -61,9 +61,13 @@ def on_user_prompt_submit(payload: dict, data_dir: str | None) -> None:
 
 
 def _capture(payload: dict, data_dir: str | None) -> tuple[str, str] | None:
-    """Shared Stop/SessionEnd path: ensure a run exists and rebuild its turns.
+    """Shared Stop/SessionEnd path: attribute this session's new turns to the
+    active run and capture them.
 
-    Returns (run_id, session_id) so the caller can decide whether to finalize.
+    A tracked run (the open_run pointer) takes precedence over the session's
+    passive run, so turns produced while tracking attach to the tracked run.
+
+    Returns (run_id, session_id) — the run the turns were attributed to.
     """
     session_id = payload.get("session_id")
     transcript = _transcript(payload)
@@ -71,10 +75,14 @@ def _capture(payload: dict, data_dir: str | None) -> tuple[str, str] | None:
         return None
     conn = db.connect(data_dir)
     try:
-        run_id = store.get_run_for_session(conn, session_id)
-        if run_id is None:  # session predates install — open lazily
-            run_id = store.open_passive_run(
+        # Always ensure the session has its own passive run (so SessionEnd can
+        # close it regardless of any tracked run).
+        passive = store.get_run_for_session(conn, session_id)
+        if passive is None:
+            passive = store.open_passive_run(
                 conn, session_id, transcript, _project(payload))
+
+        run_id = store.get_open_tracked_run(conn) or passive
         store.capture_session_turns(conn, run_id, session_id, transcript)
         return run_id, session_id
     finally:
@@ -94,13 +102,14 @@ def on_session_end(payload: dict, data_dir: str | None) -> None:
     result = _capture(payload, data_dir)
     if result is None:
         return
-    run_id, _ = result
+    _, session_id = result
     conn = db.connect(data_dir)
     try:
-        # Only passive runs close at SessionEnd; a tracked run stays open until
-        # /track-done.
-        if store.run_capture_mode(conn, run_id) == "passive":
-            store.finalize_run(conn, run_id, closed_by="SessionEnd")
+        # Close the session's own passive run. A tracked run is never finalized
+        # here — it stays open until /track-done, even across SessionEnd.
+        passive = store.get_run_for_session(conn, session_id)
+        if passive and store.run_capture_mode(conn, passive) == "passive":
+            store.finalize_run(conn, passive, closed_by="SessionEnd")
     finally:
         conn.close()
 

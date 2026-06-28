@@ -67,7 +67,8 @@ def render_overview(conn: sqlite3.Connection) -> str:
     if not n_turns:
         return "No usage captured yet. Run some sessions and check back."
 
-    n_runs = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+    n_runs = conn.execute(
+        "SELECT COUNT(DISTINCT run_id) FROM turns").fetchone()[0]
     wall = conn.execute(
         "SELECT COALESCE(SUM(wall_clock_ms),0) FROM runs").fetchone()[0]
     day0 = (tot[6] or "")[:10]

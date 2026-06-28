@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Launcher for the claude-performance-tracker CLI, added to PATH when the plugin
+# is installed. Resolves the bundled scripts relative to itself, so it works in
+# both installed and --plugin-dir dev modes without any CLAUDE_PLUGIN_* env var.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "$here/../scripts/track.py" "$@"

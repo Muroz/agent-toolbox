@@ -7,18 +7,33 @@ description: Open a deliberately-tracked performance run for the work you are ab
 
 Begin a **tracked run** so this stretch of work is measured as one comparable unit.
 A tracked run overrides passive capture and stays open across `/clear` and even across
-sessions until `/track-done` closes it.
+sessions until `/track-done` closes it. Turns produced while it is open attach to it.
 
-## What this does
+Best invoked at the **start** of a fresh context (e.g. right after `/clear` or in a new
+session) so the measured envelope is clean.
 
-1. Collect the run's tags (ask the user, do not guess):
-   - `task_label` — short description of the task.
-   - `task_type` — one of: bugfix, feature, refactor, research, debug (or a new one).
-   - `size_class` — S / M / L (rough expected effort).
-   - `intended_approach` — optional free text (e.g. "plan-mode + opus-4-8, no subagents").
-2. Create a `runs` row with `capture_mode='tracked'` and a fresh, session-independent
-   `run_id`; set the `open_run` pointer.
-3. Confirm the run is open and that `/track-done` should be used to close it.
+## Steps
 
-> Scaffold: wire this to `scripts/` (an entrypoint that inserts the tracked run and sets
-> the open_run pointer). Tracked-run creation is tracked as a tracer-bullet issue.
+1. Gather these from the user — ask, do not guess (use AskUserQuestion for the choices):
+   - **label** — short description of the task (free text).
+   - **type** — one of: `bugfix`, `feature`, `refactor`, `research`, `debug`, `other`.
+   - **size** — `S`, `M`, or `L` (rough expected effort).
+   - **approach** — optional free text describing the intended approach
+     (e.g. "plan-mode + opus-4-8, no subagents").
+2. Open the run by invoking the tracker CLI:
+
+   ```bash
+   cpt start --label "<label>" --type <type> --size <size> --approach "<approach>"
+   ```
+
+   If `cpt` is not on PATH (e.g. dev mode), resolve the bundled script and call it:
+
+   ```bash
+   TRACK=$(ls -t ~/.claude/plugins/cache/*/claude-performance-tracker/*/scripts/track.py 2>/dev/null | head -1)
+   python3 "$TRACK" start --label "<label>" --type <type> --size <size> --approach "<approach>"
+   ```
+
+3. Relay the confirmation, and remind the user to run `/track-done` when finished.
+
+The CLI refuses to open a second run while one is already open — if so, tell the user to
+`/track-done` first.

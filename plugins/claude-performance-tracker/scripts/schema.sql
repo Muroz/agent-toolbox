@@ -22,9 +22,10 @@ CREATE TABLE IF NOT EXISTS runs (
     closed_by       TEXT,          -- 'SessionEnd' | 'clear' | 'track-done' | NULL (open)
 
     -- task tags (tracked runs; nullable for passive)
-    task_label      TEXT,
-    task_type       TEXT,          -- bugfix | feature | refactor | research | debug | ...
-    size_class      TEXT,          -- S | M | L
+    task_label        TEXT,
+    task_type         TEXT,        -- bugfix | feature | refactor | research | debug | ...
+    size_class        TEXT,        -- S | M | L
+    intended_approach TEXT,        -- free-text approach the user set at /track
 
     -- approach descriptor (auto-derived; comma/JSON encoded where multi-valued)
     models          TEXT,
