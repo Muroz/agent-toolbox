@@ -88,11 +88,13 @@ def _load(path: str) -> list[dict]:
     return rows
 
 
-def parse_turns(path: str) -> list[Turn]:
+def parse_turns(path: str, include_sidechain: bool = False) -> list[Turn]:
     """Parse a transcript into turns with their token envelopes.
 
-    Only turns that received at least one (main, non-sidechain) assistant
-    response are returned.
+    Only turns that received at least one assistant response are returned.
+    `include_sidechain` must be True when parsing a subagent's own transcript
+    (whose lines are all sidechain); it stays False for a main transcript so any
+    embedded subagent lines are not double-counted.
     """
     rows = _load(path)
     turns: list[Turn] = []
@@ -117,7 +119,7 @@ def parse_turns(path: str) -> list[Turn]:
         elif (
             rec.get("type") == "assistant"
             and cur is not None
-            and not rec.get("isSidechain")
+            and (include_sidechain or not rec.get("isSidechain"))
         ):
             mid = (rec.get("message") or {}).get("id") or rec.get("uuid")
             if mid:

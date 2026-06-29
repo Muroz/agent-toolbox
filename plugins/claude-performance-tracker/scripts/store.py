@@ -61,18 +61,22 @@ def open_passive_run(
 
 
 def capture_session_turns(
-    conn: sqlite3.Connection, run_id: str, session_id: str, transcript_path: str
+    conn: sqlite3.Connection, run_id: str, session_id: str, transcript_path: str,
+    query_source: str = "main", include_sidechain: bool = False,
 ) -> int:
-    """Insert this session's not-yet-seen turns, attributed to `run_id`.
+    """Insert not-yet-seen turns from a transcript, attributed to `run_id`.
 
     Insert-only (never rewrite): a turn's run attribution is fixed when it is
     first captured — based on whichever run was active at that Stop — so flipping
     the tracked/passive pointer mid-session never re-labels earlier turns. Idempotent
     because turn_id (the user prompt uuid) is the primary key.
+
+    `query_source` tags the turns ('main' or 'subagent'); `include_sidechain`
+    is set when parsing a subagent's own transcript.
     """
     seen = {r[0] for r in conn.execute("SELECT turn_id FROM turns")}
     inserted = 0
-    for t in T.parse_turns(transcript_path):
+    for t in T.parse_turns(transcript_path, include_sidechain=include_sidechain):
         if t.turn_id in seen:
             continue
         conn.execute(
@@ -82,7 +86,7 @@ def capture_session_turns(
                 cache_creation_tokens, num_tool_calls, prompt_text, source)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (t.turn_id, run_id, session_id, t.seq, t.started_at, t.ended_at,
-             t.model, t.query_source, t.input_tokens, t.output_tokens,
+             t.model, query_source, t.input_tokens, t.output_tokens,
              t.cache_read_tokens, t.cache_creation_tokens, t.num_tool_calls,
              t.prompt_text, SOURCE),
         )

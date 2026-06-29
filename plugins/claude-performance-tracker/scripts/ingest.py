@@ -94,8 +94,28 @@ def on_stop(payload: dict, data_dir: str | None) -> None:
 
 
 def on_subagent_stop(payload: dict, data_dir: str | None) -> None:
-    # Subagent token attribution is a later slice.
-    pass
+    """Attribute a finished subagent's token usage to the parent run.
+
+    The payload's transcript_path points at the subagent's own (sidechain)
+    transcript. Its turns attach to whichever run the parent session is feeding
+    (open tracked run, else the session's passive run), tagged query_source=subagent.
+    """
+    session_id = payload.get("session_id")
+    transcript = _transcript(payload)
+    if not session_id or not transcript:
+        return
+    conn = db.connect(data_dir)
+    try:
+        run_id = store.get_open_tracked_run(conn) \
+            or store.get_run_for_session(conn, session_id)
+        if run_id is None:
+            run_id = store.open_passive_run(
+                conn, session_id, None, _project(payload))
+        store.capture_session_turns(
+            conn, run_id, session_id, transcript,
+            query_source="subagent", include_sidechain=True)
+    finally:
+        conn.close()
 
 
 def on_session_end(payload: dict, data_dir: str | None) -> None:

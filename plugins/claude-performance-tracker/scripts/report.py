@@ -118,6 +118,15 @@ def render_overview(conn: sqlite3.Connection) -> str:
               _table(["project", "runs", "prompts", "input", "output"],
                      [[p, _n(rn), _n(pr), _n(i), _n(o)] for p, rn, pr, i, o in by_proj])]
 
+    by_source = conn.execute(
+        """SELECT query_source, COUNT(*), SUM(input_tokens), SUM(output_tokens)
+           FROM turns GROUP BY query_source ORDER BY query_source"""
+    ).fetchall()
+    if any(r[0] == "subagent" for r in by_source):
+        parts += ["", "## By query source",
+                  _table(["source", "turns", "input", "output"],
+                         [[s, _n(c), _n(i), _n(o)] for s, c, i, o in by_source])]
+
     by_day = conn.execute(
         """SELECT substr(started_at,1,10) AS day, COUNT(*),
                   SUM(input_tokens), SUM(output_tokens)
