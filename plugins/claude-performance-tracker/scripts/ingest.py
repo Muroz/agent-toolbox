@@ -20,6 +20,7 @@ import os
 import sys
 
 import db
+import infer_outcome
 import store
 
 
@@ -130,6 +131,7 @@ def on_session_end(payload: dict, data_dir: str | None) -> None:
         passive = store.get_run_for_session(conn, session_id)
         if passive and store.run_capture_mode(conn, passive) == "passive":
             store.finalize_run(conn, passive, closed_by="SessionEnd")
+            infer_outcome.infer_and_store(conn, passive)
     finally:
         conn.close()
 
