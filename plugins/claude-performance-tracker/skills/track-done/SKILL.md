@@ -17,7 +17,7 @@ measured cost interpretable. Outcome and satisfaction are mandatory.
 2. Close the run:
 
    ```bash
-   cpt done --outcome <outcome> --satisfaction <1-5> --note "<note>"
+   cpt track done --outcome <outcome> --satisfaction <1-5> --note "<note>"
    ```
 
    Fallback if `cpt` is not on PATH:

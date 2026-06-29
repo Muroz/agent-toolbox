@@ -23,7 +23,7 @@ session) so the measured envelope is clean.
 2. Open the run by invoking the tracker CLI:
 
    ```bash
-   cpt start --label "<label>" --type <type> --size <size> --approach "<approach>"
+   cpt track start --label "<label>" --type <type> --size <size> --approach "<approach>"
    ```
 
    If `cpt` is not on PATH (e.g. dev mode), resolve the bundled script and call it:

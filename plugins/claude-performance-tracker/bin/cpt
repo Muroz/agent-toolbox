@@ -1,7 +1,19 @@
 #!/usr/bin/env bash
-# Launcher for the claude-performance-tracker CLI, added to PATH when the plugin
-# is installed. Resolves the bundled scripts relative to itself, so it works in
-# both installed and --plugin-dir dev modes without any CLAUDE_PLUGIN_* env var.
+# Launcher/multiplexer for the claude-performance-tracker CLI, added to PATH when
+# the plugin is installed. Resolves the bundled scripts relative to itself, so it
+# works in both installed and --plugin-dir dev modes with no CLAUDE_PLUGIN_* env var.
+#
+#   cpt track  start|done ...     -> track.py
+#   cpt report [view] ...         -> report.py
+#   cpt eval   list-unjudged|context|persist ...  -> evaluate.py
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec python3 "$here/../scripts/track.py" "$@"
+scripts="$here/../scripts"
+sub="${1:-}"
+shift || true
+case "$sub" in
+  track)  exec python3 "$scripts/track.py" "$@" ;;
+  report) exec python3 "$scripts/report.py" "$@" ;;
+  eval)   exec python3 "$scripts/evaluate.py" "$@" ;;
+  *) echo "usage: cpt {track|report|eval} ..." >&2; exit 2 ;;
+esac

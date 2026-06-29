@@ -5,18 +5,38 @@ description: Score the qualitative side of one or more runs using the usage-eval
 
 # /evaluate-run — qualitative scoring
 
-Invoke the `usage-evaluator` subagent over a run (or a batch of recent un-judged runs) to
-score the behavioral rubric and per-prompt quality defined in `scripts/rubric.yaml`.
+Score one or more runs against the rubric in `scripts/rubric.yaml` using the
+`usage-evaluator` subagent (Haiku, low effort), and persist the results. Never run this in
+the hot path — it is deliberate / batched.
 
-## What this does
+## Steps
 
-1. Resolve the target runs: a given `run_id`, or the most recent runs without a
-   `judge_verdicts` row.
-2. For each run, dispatch the `usage-evaluator` subagent (Haiku, low effort) with the
-   run's transcript slice.
-3. Persist results: one `judge_verdicts` row + long-form `scores` rows (one per
-   dimension, stamped with the current `rubric_version`).
+1. **Resolve targets.**
+   - If the user gave a `run_id`, use it.
+   - Otherwise list recent un-judged runs and pick from them:
+     ```bash
+     cpt eval list-unjudged --limit 10
+     ```
 
-Never run this on every turn — it is deliberate/batched so it stays cheap.
+2. **For each target run**, get its context (transcripts + per-turn prompts + rubric):
+   ```bash
+   cpt eval context --run-id <run_id>
+   ```
 
-> Scaffold: dispatch + persistence are tracer-bullet issues.
+3. **Dispatch the `usage-evaluator` subagent** (via the Agent tool) for that run, passing
+   the context from step 2. It reads the transcript(s) and `rubric.yaml`, scores the
+   `agent_behavior` dimensions once for the run and the `prompt_quality` dimensions once
+   per `turn_id`, and returns a JSON verdict (see the agent's contract).
+
+4. **Persist** the returned JSON (write it to a temp file, then):
+   ```bash
+   cpt eval persist --run-id <run_id> --json-file /tmp/verdict.json
+   ```
+   (or pipe the JSON to `cpt eval persist --run-id <run_id>` on stdin.)
+
+5. Summarize what was scored (overall grade + notable rationales). View later with
+   `cpt report run <run_id>`.
+
+Fallback if `cpt` is not on PATH: resolve `scripts/evaluate.py` via
+`ls -t ~/.claude/plugins/cache/*/claude-performance-tracker/*/scripts/evaluate.py | head -1`
+and call it with `python3`.

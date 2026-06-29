@@ -22,7 +22,19 @@ Render reports from the local store. All numbers are computed at read time from 
 
 ## How to run
 
-Invoke `scripts/report.py <view> [args] --data-dir "$CLAUDE_PLUGIN_DATA"` and present the
-markdown tables it produces. Default to `overview` when no view is given.
+Run `cpt report [view] [args]` and present the markdown tables it produces (default view
+is `overview`):
+
+```bash
+cpt report                       # overview
+cpt report compare --by model    # approach comparison
+```
+
+Fallback if `cpt` is not on PATH:
+
+```bash
+REPORT=$(ls -t ~/.claude/plugins/cache/*/claude-performance-tracker/*/scripts/report.py 2>/dev/null | head -1)
+python3 "$REPORT" [view] [args]
+```
 
 > Scaffold: report queries are tracer-bullet issues, one per view.
