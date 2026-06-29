@@ -232,6 +232,162 @@ def render_compare_for(data_dir: str | None, by: str, min_samples: int) -> str:
         conn.close()
 
 
+def render_degradation(conn: sqlite3.Connection, period: str = "month") -> str:
+    """Per-model trend of efficiency/quality metrics over time. Rising friction
+    or a falling judge score across periods is the drift signal."""
+    plen = 7 if period == "month" else 10
+    rows = conn.execute(
+        f"""SELECT COALESCE(models,'(unknown)') AS model,
+                   substr(started_at,1,{plen}) AS period,
+                   COUNT(*) AS n,
+                   AVG(CASE WHEN num_prompts>0
+                            THEN CAST(output_tokens AS REAL)/num_prompts
+                            ELSE output_tokens END) AS out_per_prompt,
+                   AVG(interrupts) AS interrupts,
+                   AVG(edits_without_read) AS ewr,
+                   AVG(reasoning_loops) AS loops,
+                   AVG(peak_context_pct) AS ctx
+            FROM runs
+            WHERE ended_at IS NOT NULL AND started_at IS NOT NULL
+            GROUP BY model, period ORDER BY model, period"""
+    ).fetchall()
+    if not rows:
+        return "No finalized runs yet."
+
+    judge = {}
+    for jr in conn.execute(
+        f"""SELECT COALESCE(r.models,'(unknown)') AS model,
+                   substr(r.started_at,1,{plen}) AS period, AVG(s.score)
+            FROM runs r JOIN scores s
+              ON s.subject_type='run' AND s.subject_id=r.run_id
+            WHERE r.started_at IS NOT NULL GROUP BY model, period"""):
+        judge[(jr[0], jr[1])] = jr[2]
+
+    by_model: dict = {}
+    for r in rows:
+        by_model.setdefault(r["model"], []).append(r)
+
+    parts = [f"# Degradation watch (by {period})", "",
+             "Per-model trend. Rising friction or a falling judge score over "
+             "time signals drift."]
+    for model, mrows in by_model.items():
+        body = []
+        for r in mrows:
+            jv = judge.get((model, r["period"]))
+            body.append([r["period"], _n(r["n"]), _n(r["out_per_prompt"]),
+                         round(r["interrupts"], 2), round(r["ewr"], 2),
+                         round(r["loops"], 2), round(r["ctx"] or 0, 1),
+                         (round(jv, 2) if jv is not None else "—")])
+        parts += ["", f"## {model}",
+                  _table(["period", "runs", "out/prompt", "interrupts",
+                          "edits w/o read", "loops", "ctx%", "judge"], body)]
+    return "\n".join(parts)
+
+
+def render_run(conn: sqlite3.Connection, run_id: str) -> str:
+    r = conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+    if r is None:
+        return f"No run found with id '{run_id}'."
+
+    def g(k):
+        return r[k] if r[k] is not None else "—"
+
+    parts = [f"# Run scorecard — {run_id}", "",
+             _table(["field", "value"], [
+                 ["capture mode", g("capture_mode")],
+                 ["project", g("project")],
+                 ["task", f'{g("task_label")} [{g("task_type")}/{g("size_class")}]'],
+                 ["started", g("started_at")],
+                 ["ended", g("ended_at")],
+                 ["closed by", g("closed_by")],
+             ]),
+             "", "## Approach",
+             _table(["field", "value"], [
+                 ["models", g("models")],
+                 ["effort", g("effort")],
+                 ["permission mode", g("permission_mode")],
+                 ["subagents", g("subagents_used")],
+                 ["skills", g("skills_used")],
+                 ["mcp", g("mcp_tools_used")],
+                 ["intended approach", g("intended_approach")],
+             ]),
+             "", "## Cost & output",
+             _table(["metric", "value"], [
+                 ["prompts", _n(r["num_prompts"])],
+                 ["tool calls", _n(r["num_tool_calls"])],
+                 ["input tokens", _n(r["input_tokens"])],
+                 ["output tokens", _n(r["output_tokens"])],
+                 ["cache read", _n(r["cache_read_tokens"])],
+                 ["cache creation", _n(r["cache_creation_tokens"])],
+                 ["wall-clock", _ms(r["wall_clock_ms"])],
+                 ["lines +/-", f'+{_n(r["lines_added"])} / -{_n(r["lines_removed"])}'],
+                 ["files touched", _n(r["files_touched"])],
+                 ["doc words", _n(r["doc_words"])],
+             ]),
+             "", "## Friction & context",
+             _table(["signal", "value"], [
+                 ["interrupts", _n(r["interrupts"])],
+                 ["re-prompts", _n(r["re_prompts"])],
+                 ["edits without read", _n(r["edits_without_read"])],
+                 ["reasoning loops", _n(r["reasoning_loops"])],
+                 ["premature stops", _n(r["premature_stops"])],
+                 ["peak context %", g("peak_context_pct")],
+                 ["compactions", _n(r["compact_count"])],
+                 ["clears", _n(r["clear_count"])],
+             ])]
+
+    qs = conn.execute(
+        """SELECT query_source, SUM(input_tokens), SUM(output_tokens)
+           FROM turns WHERE run_id=? GROUP BY query_source""", (run_id,)).fetchall()
+    if any(row[0] == "subagent" for row in qs):
+        parts += ["", "## By query source",
+                  _table(["source", "input", "output"],
+                         [[row[0], _n(row[1]), _n(row[2])] for row in qs])]
+
+    outcome = f'{g("outcome")} ({g("outcome_source")})'
+    if r["satisfaction"] is not None:
+        outcome += f' · satisfaction {r["satisfaction"]}/5'
+    parts += ["", "## Outcome", outcome]
+    if r["note"]:
+        parts += [f'_note:_ {r["note"]}']
+    if r["outcome_source"] == "inferred" and r["inferred_signals"]:
+        parts += [f'_inferred from:_ `{r["inferred_signals"]}`']
+
+    verdict = conn.execute(
+        """SELECT overall_grade, notes, rubric_version, created_at
+           FROM judge_verdicts WHERE run_id=? ORDER BY created_at DESC LIMIT 1""",
+        (run_id,)).fetchone()
+    if verdict:
+        parts += ["", "## Judge verdict",
+                  f'**{g_verdict(verdict, "overall_grade")}** '
+                  f'(rubric v{verdict["rubric_version"]})']
+        if verdict["notes"]:
+            parts += [verdict["notes"]]
+        run_scores = conn.execute(
+            "SELECT dimension, score, rationale FROM scores "
+            "WHERE subject_type='run' AND subject_id=? ORDER BY dimension",
+            (run_id,)).fetchall()
+        if run_scores:
+            parts += ["", "### Agent behavior",
+                      _table(["dimension", "score", "why"],
+                             [[s[0], s[1], (s[2] or "")[:80]] for s in run_scores])]
+        prompt_scores = conn.execute(
+            """SELECT t.seq, s.dimension, s.score, substr(t.prompt_text,1,40)
+               FROM scores s JOIN turns t ON t.turn_id = s.subject_id
+               WHERE s.subject_type='prompt' AND t.run_id=?
+               ORDER BY t.seq, s.dimension""", (run_id,)).fetchall()
+        if prompt_scores:
+            parts += ["", "### Prompt quality",
+                      _table(["turn", "dimension", "score", "prompt"],
+                             [[p[0], p[1], p[2], (p[3] or "") + "…"]
+                              for p in prompt_scores])]
+    return "\n".join(parts)
+
+
+def g_verdict(row, key):
+    return row[key] if row[key] is not None else "—"
+
+
 def _not_implemented(name: str) -> str:
     return f"`{name}` view is not implemented yet."
 
@@ -249,14 +405,24 @@ def main() -> int:
                         choices=sorted(COMPARE_DIMENSIONS))
     parser.add_argument("--min", type=int, default=MIN_SAMPLES,
                         help="min successful runs per bucket to rank")
+    parser.add_argument("--period", default="month", choices=["month", "day"])
     args = parser.parse_args()
 
-    if args.view == "overview":
-        print(render_overview_for(args.data_dir))
-    elif args.view == "compare":
-        print(render_compare_for(args.data_dir, args.by, args.min))
-    else:
-        print(_not_implemented(args.view))
+    conn = db.connect(args.data_dir)
+    try:
+        if args.view == "overview":
+            print(render_overview(conn))
+        elif args.view == "compare":
+            print(render_compare(conn, args.by, args.min))
+        elif args.view == "degradation":
+            print(render_degradation(conn, args.period))
+        elif args.view == "run":
+            if not args.run_id:
+                print("Usage: report.py run <run_id>")
+                return 2
+            print(render_run(conn, args.run_id))
+    finally:
+        conn.close()
     return 0
 
 
