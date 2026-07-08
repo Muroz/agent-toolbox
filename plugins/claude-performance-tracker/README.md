@@ -289,7 +289,7 @@ python3 -m unittest discover -s tests          # 55 tests, dependency-free
 Load the plugin straight from the working tree for one session — picks up edits each launch:
 
 ```bash
-claude --plugin-dir ~/Coding/claude-toolbox/plugins/claude-performance-tracker
+claude --plugin-dir ~/Coding/agent-toolbox/plugins/claude-performance-tracker
 ```
 
 ### Refresh the installed copy
@@ -298,9 +298,9 @@ The marketplace caches a **snapshot** at the plugin's `version`, so `claude plug
 is a no-op while the version is unchanged. For same-version dev edits, reinstall:
 
 ```bash
-claude plugin uninstall claude-performance-tracker@claude-toolbox
-claude plugin marketplace update claude-toolbox
-claude plugin install claude-performance-tracker@claude-toolbox
+claude plugin uninstall claude-performance-tracker@agent-toolbox
+claude plugin marketplace update agent-toolbox
+claude plugin install claude-performance-tracker@agent-toolbox
 ```
 
 (Or bump `version` in both `plugin.json` and the marketplace entry, then `marketplace update`

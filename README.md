@@ -1,4 +1,4 @@
-# claude-toolbox
+# agent-toolbox
 
 A personal [Claude Code](https://code.claude.com) marketplace — a monorepo that hosts
 multiple plugins (and smaller atomic pieces: lone skills, hooks packs, single subagents)
@@ -7,7 +7,7 @@ under one installable source.
 ## Layout
 
 ```
-claude-toolbox/
+agent-toolbox/
 ├── .claude-plugin/marketplace.json   # lists every installable piece
 └── plugins/
     └── claude-performance-tracker/   # plugin #1
@@ -21,13 +21,13 @@ is just the subdirectory name.
 
 ```bash
 # Add this marketplace once (from a local clone, GitHub shorthand, or git URL)
-claude plugin marketplace add ~/Coding/claude-toolbox
+claude plugin marketplace add ~/Coding/agent-toolbox
 
 # Then install any plugin individually
-claude plugin install claude-performance-tracker@claude-toolbox
+claude plugin install claude-performance-tracker@agent-toolbox
 ```
 
-Update later with `claude plugin marketplace update claude-toolbox`.
+Update later with `claude plugin marketplace update agent-toolbox`.
 
 ## Plugins
 
@@ -55,7 +55,7 @@ Load the plugin straight from the working tree for a single session — picks up
 your latest edits each launch, no reinstall, no cache:
 
 ```bash
-claude --plugin-dir ~/Coding/claude-toolbox/plugins/claude-performance-tracker
+claude --plugin-dir ~/Coding/agent-toolbox/plugins/claude-performance-tracker
 ```
 
 Repeatable for multiple plugins (`--plugin-dir A --plugin-dir B`).
@@ -67,20 +67,20 @@ plugin update` is a no-op while the version is unchanged, so for same-version de
 edits, reinstall:
 
 ```bash
-claude plugin uninstall claude-performance-tracker@claude-toolbox
-claude plugin marketplace update claude-toolbox
-claude plugin install claude-performance-tracker@claude-toolbox
+claude plugin uninstall claude-performance-tracker@agent-toolbox
+claude plugin marketplace update agent-toolbox
+claude plugin install claude-performance-tracker@agent-toolbox
 ```
 
 Alternatively, bump `version` in both the plugin's `plugin.json` and its
 `marketplace.json` entry, then:
 
 ```bash
-claude plugin marketplace update claude-toolbox
-claude plugin update claude-performance-tracker@claude-toolbox   # restart to apply
+claude plugin marketplace update agent-toolbox
+claude plugin update claude-performance-tracker@agent-toolbox   # restart to apply
 ```
 
-Verify what's installed: `claude plugin details claude-performance-tracker@claude-toolbox`
+Verify what's installed: `claude plugin details claude-performance-tracker@agent-toolbox`
 (shows the component inventory: skills, agents, hooks).
 
 ### Run the tests
