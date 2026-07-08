@@ -1,8 +1,6 @@
 # agent-toolbox
 
-A personal [Claude Code](https://code.claude.com) marketplace — a monorepo that hosts
-multiple plugins (and smaller atomic pieces: lone skills, hooks packs, single subagents)
-under one installable source.
+A personal Agent toolbox marketplace (Primarily for [Claude Code](https://code.claude.com)). A monorepo for hosting plugins, skills, hooks, subagents and anything else I'm currently testing as I go deeper into AI intensive workflows under one installable source.
 
 ## Layout
 
