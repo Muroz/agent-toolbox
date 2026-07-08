@@ -127,8 +127,21 @@ Today the numbers come from parsing session transcripts. Every stored row record
 | `SubagentStop` | Parse the finished subagent's transcript and attach its turns to the parent run. |
 | `SessionEnd` | Close the passive run: aggregate turns, compute the signal summary, infer the outcome. |
 
-Hooks never block the session: on any error they exit 0 and do nothing. They read and write
-the same SQLite file the skills use, found via `${CLAUDE_PLUGIN_DATA}`.
+Hooks never block the session: on any error they exit 0 and do nothing. They run via the
+bundled `bin/cpt` launcher — a bash wrapper that picks a pyenv-independent interpreter (see
+[Python resolution](#python-resolution)) — and read and write the same SQLite file the
+skills use, found via `${CLAUDE_PLUGIN_DATA}`.
+
+#### Python resolution
+
+Hooks and the `cpt` launcher force pyenv's `system` interpreter (`PYENV_VERSION=system`).
+Without this, a project that pins an **uninstalled** version via a pyenv `.python-version`
+makes a bare `python3` (the pyenv shim) fail — e.g.
+`pyenv: version '3.10.15' is not installed` — *before* our code runs, so the hook's own
+error handling never gets a chance and the session shows a non-blocking hook error. The
+plugin's scripts are stdlib-only and run on any Python 3.9+, so the system interpreter is
+always sufficient. If you need a specific interpreter, set `CPT_PYTHON=/path/to/python3`.
+The setting is harmless when pyenv is not installed.
 
 ### Turn parsing (`transcript.py`)
 
@@ -375,7 +388,7 @@ skills include a cache-glob fallback for when it isn't found.
 claude-performance-tracker/
 ├── .claude-plugin/plugin.json
 ├── hooks/hooks.json                 # SessionStart · UserPromptSubmit · Stop · SubagentStop · SessionEnd
-├── bin/cpt                          # PATH launcher/multiplexer: track | report | eval
+├── bin/cpt                          # launcher/multiplexer: ingest | track | report | eval (also on PATH)
 ├── agents/usage-evaluator.md        # Haiku judge (agent-behaviour + prompt quality)
 ├── skills/{track,track-done,usage-report,evaluate-run}/SKILL.md
 ├── scripts/

@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/ingest.py\" --event SessionStart --data-dir \"${CLAUDE_PLUGIN_DATA}\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/bin/cpt\" ingest --event SessionStart --data-dir \"${CLAUDE_PLUGIN_DATA}\""
           }
         ]
       }
@@ -15,7 +15,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/ingest.py\" --event UserPromptSubmit --data-dir \"${CLAUDE_PLUGIN_DATA}\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/bin/cpt\" ingest --event UserPromptSubmit --data-dir \"${CLAUDE_PLUGIN_DATA}\""
           }
         ]
       }
@@ -25,7 +25,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/ingest.py\" --event Stop --data-dir \"${CLAUDE_PLUGIN_DATA}\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/bin/cpt\" ingest --event Stop --data-dir \"${CLAUDE_PLUGIN_DATA}\""
           }
         ]
       }
@@ -35,7 +35,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/ingest.py\" --event SubagentStop --data-dir \"${CLAUDE_PLUGIN_DATA}\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/bin/cpt\" ingest --event SubagentStop --data-dir \"${CLAUDE_PLUGIN_DATA}\""
           }
         ]
       }
@@ -45,7 +45,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/ingest.py\" --event SessionEnd --data-dir \"${CLAUDE_PLUGIN_DATA}\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/bin/cpt\" ingest --event SessionEnd --data-dir \"${CLAUDE_PLUGIN_DATA}\""
           }
         ]
       }
