@@ -426,8 +426,13 @@ claude-performance-tracker/
 - **`${CLAUDE_PLUGIN_ROOT}` is a *versioned* cache dir**
   (`…/cache/<marketplace>/<plugin>/<version>/`); bundled `scripts/` and `bin/` ship there.
 - **`CLAUDE_PLUGIN_*` is not in the session shell**, so skills can't reference those vars in
-  the commands they run — hence the `bin/cpt` launcher (plugin `bin/` *is* added to `PATH`)
-  and the canonical default data dir.
+  the commands they run — hence the `bin/cpt` launcher (plugin `bin/` *is* added to `PATH`).
+  The data dir Claude Code hands the hooks is also **install-source-suffixed**
+  (`claude-performance-tracker-<marketplace>`, or `-inline` under `--plugin-dir`), so the
+  read side can't just guess the unsuffixed name — the hooks write with `$CLAUDE_PLUGIN_DATA`,
+  and the CLI/skills (no env var) *discover* the populated sibling dir (`db._discover_populated_dir`,
+  most-turns-wins) instead. Without this the report reads an empty stub and prints
+  "No usage captured yet" while the data sits in the suffixed dir.
 - **Cost is tokens, not USD** — on a subscription there is no per-token bill; token counts
   are the consistent, comparable cost signal.
 - **Comparison is bucketed and guarded** — averaging across task difficulty would just

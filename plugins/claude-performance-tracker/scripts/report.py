@@ -111,7 +111,7 @@ def render_overview(conn: sqlite3.Connection) -> str:
     by_proj = conn.execute(
         """SELECT COALESCE(r.project,'(none)'), COUNT(DISTINCT r.run_id),
                   COUNT(t.turn_id), SUM(t.input_tokens), SUM(t.output_tokens)
-           FROM runs r LEFT JOIN turns t ON t.run_id = r.run_id
+           FROM runs r JOIN turns t ON t.run_id = r.run_id
            GROUP BY r.project ORDER BY SUM(t.output_tokens) DESC"""
     ).fetchall()
     parts += ["", "## By project",

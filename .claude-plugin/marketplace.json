@@ -10,7 +10,7 @@
       "name": "claude-performance-tracker",
       "source": "./plugins/claude-performance-tracker",
       "description": "Qualify good agent usage and compare approaches on a cost-per-successful-outcome basis (tokens, time, prompts).",
-      "version": "0.1.0"
+      "version": "0.1.1"
     }
   ]
 }
