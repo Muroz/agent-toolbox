@@ -97,8 +97,8 @@ class TestInferOutcome(unittest.TestCase):
     def test_self_report_never_overwritten(self):
         db.init_db(self.tmp)
         conn = db.connect(self.tmp)
-        rid = store.start_tracked_run(conn, "exp", "feature", "M", None, None)
-        store.finish_tracked_run(conn, "success", 5, None)
+        rid, _ = store.start_tracked_run(conn, "sess", "exp", "feature", "M", None, None)
+        store.finish_tracked_run(conn, "sess", "success", 5, None)
         # inference must refuse to touch a tracked / self-reported run
         self.assertIsNone(infer_outcome.infer_and_store(conn, rid))
         row = conn.execute(

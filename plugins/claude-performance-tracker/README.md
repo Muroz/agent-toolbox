@@ -161,14 +161,34 @@ that `Stop`. Turns are never rewritten, so switching the tracked/passive pointer
 never re-labels earlier turns. It's safe to run repeatedly because `turn_id` is the primary
 key.
 
-### Tracked runs & the `open_run` pointer
+### Tracked runs — per session, with pause/resume
 
-`/track` creates a `tracked` run and points the global, session-independent `open_run` marker
-at it. The `Stop` hook prefers that pointer over the session's passive run, so turns produced
-while tracking attach to the tracked run. `/track-done` closes the tracked run with the
-outcome you report and clears the pointer. `SessionEnd` never force-closes a tracked run —
-only `/track-done` does. (This is why the skills need no `session_id`: the pointer is global,
-and the hook decides attribution.)
+Tracking is **per session**. `/track` creates a `tracked` run and records it as the active
+run for *this* session in the `active_tracked` table (keyed by `session_id`, which the skills
+read from `$CLAUDE_CODE_SESSION_ID`). The `Stop` hook prefers this session's active tracked
+run over its passive run, so turns produced while tracking attach to the tracked run — and
+because attribution is per session, **two sessions can track different tasks in parallel**
+without cross-contaminating.
+
+A tracked run has three states:
+
+- **active(session)** — a row in `active_tracked`; this session's turns attach to it.
+- **paused** — open in `runs` (no `ended_at`/outcome) but absent from `active_tracked`: it
+  receives no turns and is resumable.
+- **done** — finalized by `/track-done` (terminal).
+
+`/track-pause` detaches this session's active run (keeps it open). `/track-resume <id|label>`
+reattaches a paused run to the current session — possibly a *different* session from where it
+started, so a task can be paused in one session and finished in another. `SessionEnd`
+**auto-pauses** (detaches, never finalizes) the session's active run, so it survives as
+resumable rather than being stranded in a dead session. Only `/track-done` finalizes a run
+(defaulting to this session's active run, or `--run <id>` to close a paused one directly).
+Starting or resuming while already tracking auto-pauses the previous run — nothing is lost.
+`/track-list` shows all open runs and their state.
+
+Invariants: `active_tracked.session_id` is unique (a session tracks ≤1 run at a time) and
+`run_id` is unique (a run is active in ≤1 session at a time); resume cleans up any stale
+attachment (e.g. from a crashed session) before reattaching.
 
 ### The signal summary (`signals.py`)
 
@@ -239,13 +259,13 @@ flowchart TD
 
     subgraph Skills [You run these · skills]
       direction TB
-      TR["/track · /track-done<br/>open/close a tracked run + record outcome"]
+      TR["/track · /track-done · /track-pause<br/>/track-resume · /track-list<br/>per-session tracked-run lifecycle + outcome"]
       EV["/evaluate-run<br/>score run quality"]
       RP["/usage-report<br/>read reports"]
     end
 
     UE[[usage-evaluator subagent<br/>Haiku · rubric scoring]]
-    DB[("usage.db<br/>runs · turns · scores<br/>judge_verdicts · sessions · open_run")]
+    DB[("usage.db<br/>runs · turns · scores<br/>judge_verdicts · sessions · active_tracked")]
 
     T --> ST
     T --> SAS
@@ -254,7 +274,7 @@ flowchart TD
     SAS --> DB
     SE --> DB
 
-    TR -->|open_run pointer +<br/>self-reported outcome| DB
+    TR -->|active_tracked pointer +<br/>self-reported outcome| DB
     EV -->|gather context| DB
     EV --> UE
     UE -->|verdict JSON| EV
@@ -280,7 +300,7 @@ One SQLite database at `${CLAUDE_PLUGIN_DATA}/usage.db` (i.e.
 | `scores` | Long-form (EAV) qualitative scores for runs and prompts, stamped with `rubric_version`. |
 | `judge_verdicts` | One row per judge pass (provenance for the scores). |
 | `sessions` | Maps `session_id → run_id` + the transcript path (keeps `run_id` session-independent). |
-| `open_run` | Singleton pointer to the currently-open tracked run. |
+| `active_tracked` | Per-session pointer (`session_id` → `run_id`) to the tracked run each session is actively capturing into; absence = paused. |
 
 Raw facts only — derived/comparison metrics are computed in `report.py`.
 
@@ -290,16 +310,23 @@ Raw facts only — derived/comparison metrics are computed in `report.py`.
 
 | Skill | What it does |
 |-------|--------------|
-| `/track` | Open a tracked run (label, type, size, intended approach). |
+| `/track` | Open a tracked run for this session (label, type, size, intended approach). |
 | `/track-done` | Close it with a self-reported outcome + satisfaction. |
+| `/track-pause` | Detach this session's tracked run without finalizing it (keeps it resumable). |
+| `/track-resume` | Reattach a paused run to this session (by id or label) — even across sessions. |
+| `/track-list` | Show open tracked runs and whether each is active (and where) or paused. |
 | `/usage-report` | Render `overview` / `compare` / `degradation` / `run <id>`. |
 | `/evaluate-run` | Score run(s) with the `usage-evaluator` subagent. |
 
 Under the hood (also usable directly):
 
 ```bash
-cpt track start --label "…" --type feature --size M --approach "plan-mode, opus-4-8"
-cpt track done  --outcome success --satisfaction 4
+SID="$CLAUDE_CODE_SESSION_ID"     # skills pass this so capture is per session
+cpt track start  --session-id "$SID" --label "…" --type feature --size M --approach "plan-mode, opus-4-8"
+cpt track pause  --session-id "$SID"
+cpt track resume --session-id "$SID" --run "<run-id-or-label>"
+cpt track done   --session-id "$SID" --outcome success --satisfaction 4   # or --run <id>
+cpt track list
 cpt report                       # overview
 cpt report compare --by model    # or --by mode|subagent|skill|effort, --min N
 cpt report degradation --period month
@@ -390,10 +417,10 @@ claude-performance-tracker/
 ├── hooks/hooks.json                 # SessionStart · UserPromptSubmit · Stop · SubagentStop · SessionEnd
 ├── bin/cpt                          # launcher/multiplexer: ingest | track | report | eval (also on PATH)
 ├── agents/usage-evaluator.md        # Haiku judge (agent-behaviour + prompt quality)
-├── skills/{track,track-done,usage-report,evaluate-run}/SKILL.md
+├── skills/{track,track-done,track-pause,track-resume,track-list,usage-report,evaluate-run}/SKILL.md
 ├── scripts/
 │   ├── db.py            # data-dir resolution + idempotent schema init
-│   ├── schema.sql       # runs · turns · scores · judge_verdicts · sessions · open_run
+│   ├── schema.sql       # runs · turns · scores · judge_verdicts · sessions · active_tracked
 │   ├── ingest.py        # hook dispatch (never blocks the session)
 │   ├── transcript.py    # turn parsing (dedup, boundaries, sidechain)
 │   ├── store.py         # run/turn persistence, tracked-run lifecycle, finalize
@@ -446,7 +473,8 @@ claude-performance-tracker/
 Foundations are laid for each; none requires a rewrite:
 
 - **OTEL receiver** — precise `cost_usd`/`duration_ms`/attribution without re-deriving.
-- **Cross-session tracked runs** — resume an open tracked run in a later session
-  (`run_id` is already session-independent; `open_run` already persists).
+- ~~**Cross-session tracked runs**~~ — **shipped**: per-session tracking with
+  `/track-pause` / `/track-resume` lets a run be paused and resumed in a later (or
+  different) session, and lets sessions track different tasks in parallel.
 - **Scheduled digest**, **live statusline**, **real-time prompt coaching**, and richer
   **exporters** (JSON/CSV/HTML/dashboard) over the same raw tables.

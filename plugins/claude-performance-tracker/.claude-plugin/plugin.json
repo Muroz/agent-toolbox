@@ -1,6 +1,6 @@
 {
   "name": "claude-performance-tracker",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Qualify good agent usage and compare approaches on a cost-per-successful-outcome basis (tokens, time, prompts).",
   "author": {
     "name": "Diego Zuluaga"

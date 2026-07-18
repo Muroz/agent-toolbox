@@ -18,7 +18,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import db  # noqa: E402  (after sys.path injection)
 
-EXPECTED_TABLES = {"runs", "turns", "scores", "judge_verdicts", "open_run"}
+EXPECTED_TABLES = {"runs", "turns", "scores", "judge_verdicts", "active_tracked"}
 
 
 def tables(database: Path) -> set:

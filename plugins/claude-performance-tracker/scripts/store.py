@@ -157,23 +157,67 @@ def run_capture_mode(conn: sqlite3.Connection, run_id: str) -> str | None:
     return row[0] if row else None
 
 
-# ----- tracked runs ---------------------------------------------------------
+# ----- tracked runs (per-session, with pause/resume) ------------------------
+#
+# Attribution is per session: each session has at most one *active* tracked run
+# (a row in active_tracked). A tracked run that is open in `runs` but not in
+# active_tracked is PAUSED — resumable. This lets sessions track different tasks
+# in parallel, and lets a task be paused in one session and resumed in another.
 
-def get_open_tracked_run(conn: sqlite3.Connection) -> str | None:
-    """The currently-open tracked run, if any (the session-independent pointer)."""
-    row = conn.execute("SELECT run_id FROM open_run WHERE id = 1").fetchone()
-    return row[0] if row and row[0] else None
+def get_active_tracked_run(
+    conn: sqlite3.Connection, session_id: str
+) -> str | None:
+    """The tracked run this session is actively attaching turns to, if any."""
+    if not session_id:
+        return None
+    row = conn.execute(
+        "SELECT run_id FROM active_tracked WHERE session_id = ?", (session_id,)
+    ).fetchone()
+    return row[0] if row else None
+
+
+def _attach(conn: sqlite3.Connection, session_id: str, run_id: str) -> None:
+    """Make `run_id` the active tracked run for `session_id`.
+
+    Clears any prior attachment for this session AND any stale attachment of
+    this run to another (e.g. crashed) session, so the invariants
+    (session_id unique, run_id unique) always hold.
+    """
+    conn.execute("DELETE FROM active_tracked WHERE session_id = ? OR run_id = ?",
+                 (session_id, run_id))
+    conn.execute(
+        "INSERT INTO active_tracked (session_id, run_id, attached_at) "
+        "VALUES (?, ?, ?)", (session_id, run_id, now_iso()))
+
+
+def pause_tracked_run(
+    conn: sqlite3.Connection, session_id: str
+) -> str | None:
+    """Detach (auto-pause) this session's active tracked run without finalizing
+    it. Returns the paused run_id, or None if the session had none active."""
+    run_id = get_active_tracked_run(conn, session_id)
+    if run_id is None:
+        return None
+    conn.execute("DELETE FROM active_tracked WHERE session_id = ?", (session_id,))
+    conn.commit()
+    return run_id
 
 
 def start_tracked_run(
     conn: sqlite3.Connection,
+    session_id: str,
     label: str,
     task_type: str | None,
     size_class: str | None,
     intended_approach: str | None,
     project: str | None,
-) -> str:
-    """Open a tracked run and point the global open_run marker at it."""
+) -> tuple[str, str | None]:
+    """Open a tracked run and make it this session's active run.
+
+    If the session was already tracking another run, that run is auto-paused
+    (kept open, resumable). Returns (new_run_id, auto_paused_run_id | None).
+    """
+    paused = get_active_tracked_run(conn, session_id)
     run_id = new_run_id()
     conn.execute(
         """INSERT INTO runs
@@ -183,23 +227,85 @@ def start_tracked_run(
         (run_id, project, now_iso(), label, task_type, size_class,
          intended_approach, SOURCE),
     )
-    conn.execute(
-        "INSERT OR REPLACE INTO open_run (id, run_id, opened_at) VALUES (1, ?, ?)",
-        (run_id, now_iso()),
-    )
+    _attach(conn, session_id, run_id)
     conn.commit()
-    return run_id
+    return run_id, (paused if paused != run_id else None)
+
+
+def resume_tracked_run(
+    conn: sqlite3.Connection, session_id: str, selector: str
+) -> tuple[str | None, str | None, list]:
+    """Reattach a paused tracked run to this session.
+
+    `selector` matches an open tracked run by exact run_id or by task label.
+    Any run currently active in this session is auto-paused first.
+
+    Returns (resumed_run_id, auto_paused_run_id, ambiguous_matches):
+      * resumed_run_id set on success;
+      * (None, _, [])          -> no paused run matched;
+      * (None, _, [rows...])   -> selector matched several — caller disambiguates.
+    """
+    candidates = _open_paused_matches(conn, selector)
+    if not candidates:
+        return None, None, []
+    if len(candidates) > 1:
+        return None, None, candidates
+    run_id = candidates[0]["run_id"]
+    paused = get_active_tracked_run(conn, session_id)
+    _attach(conn, session_id, run_id)
+    conn.commit()
+    return run_id, (paused if paused != run_id else None), []
+
+
+def _open_paused_matches(conn: sqlite3.Connection, selector: str) -> list:
+    """Open tracked runs (not yet done) that are currently paused and match
+    `selector` by exact run_id or by task label."""
+    rows = conn.execute(
+        """SELECT r.run_id, r.task_label, r.task_type, r.size_class
+           FROM runs r
+           WHERE r.capture_mode = 'tracked' AND r.ended_at IS NULL
+             AND r.run_id NOT IN (SELECT run_id FROM active_tracked)
+             AND (r.run_id = ? OR r.task_label = ?)""",
+        (selector, selector),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_open_tracked_runs(conn: sqlite3.Connection) -> list:
+    """All open (not-done) tracked runs with their state — active (and in which
+    session) or paused. Powers /track-list and resume disambiguation."""
+    rows = conn.execute(
+        """SELECT r.run_id, r.task_label, r.task_type, r.size_class,
+                  r.started_at, a.session_id AS active_session
+           FROM runs r
+           LEFT JOIN active_tracked a ON a.run_id = r.run_id
+           WHERE r.capture_mode = 'tracked' AND r.ended_at IS NULL
+           ORDER BY r.started_at""",
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def finish_tracked_run(
     conn: sqlite3.Connection,
+    session_id: str,
     outcome: str,
     satisfaction: int | None,
     note: str | None,
+    run_id: str | None = None,
 ) -> str | None:
-    """Finalize the open tracked run with its self-reported outcome and clear
-    the pointer. Returns the run_id, or None if no tracked run is open."""
-    run_id = get_open_tracked_run(conn)
+    """Finalize a tracked run with its self-reported outcome and detach it.
+
+    Targets `run_id` when given (to close a paused run directly), else this
+    session's active run. Returns the run_id, or None if nothing matched.
+    """
+    if run_id is None:
+        run_id = get_active_tracked_run(conn, session_id)
+    else:
+        ok = conn.execute(
+            "SELECT 1 FROM runs WHERE run_id = ? AND capture_mode = 'tracked' "
+            "AND ended_at IS NULL", (run_id,)).fetchone()
+        if ok is None:
+            return None
     if run_id is None:
         return None
     finalize_run(conn, run_id, closed_by="track-done")
@@ -209,6 +315,6 @@ def finish_tracked_run(
            WHERE run_id = ?""",
         (outcome, satisfaction, note, run_id),
     )
-    conn.execute("DELETE FROM open_run WHERE id = 1")
+    conn.execute("DELETE FROM active_tracked WHERE run_id = ?", (run_id,))
     conn.commit()
     return run_id

@@ -5,8 +5,10 @@ description: Close the currently-open tracked performance run and record its out
 
 # /track-done — close a tracked run
 
-Finalize the open tracked run with **ground-truth outcome** — the signal that makes the
-measured cost interpretable. Outcome and satisfaction are mandatory.
+Finalize a tracked run with **ground-truth outcome** — the signal that makes the measured
+cost interpretable. Outcome and satisfaction are mandatory. By default this closes the run
+**this session** is actively tracking; pass `--run <id>` to close a specific paused run
+without resuming it.
 
 ## Steps
 
@@ -14,20 +16,23 @@ measured cost interpretable. Outcome and satisfaction are mandatory.
    - **outcome** — `success`, `partial`, or `failed`.
    - **satisfaction** — an integer 1–5.
    - **note** — optional free text.
-2. Close the run:
+2. Close the run (scoped to this session):
 
    ```bash
-   cpt track done --outcome <outcome> --satisfaction <1-5> --note "<note>"
+   cpt track done --session-id "$CLAUDE_CODE_SESSION_ID" \
+     --outcome <outcome> --satisfaction <1-5> --note "<note>"
    ```
 
    Fallback if `cpt` is not on PATH:
 
    ```bash
    TRACK=$(ls -t ~/.claude/plugins/cache/*/claude-performance-tracker/*/scripts/track.py 2>/dev/null | head -1)
-   python3 "$TRACK" done --outcome <outcome> --satisfaction <1-5> --note "<note>"
+   python3 "$TRACK" done --session-id "$CLAUDE_CODE_SESSION_ID" \
+     --outcome <outcome> --satisfaction <1-5> --note "<note>"
    ```
 
 3. Relay the confirmation.
 
-If the CLI reports no tracked run is open, tell the user there is nothing to close and that
-they can start one with `/track`.
+If the CLI reports this session has no active tracked run, the task may be paused — show
+the user `/track-list` and offer to `/track-resume` it first, or close it directly by id
+with `--run <id>`.

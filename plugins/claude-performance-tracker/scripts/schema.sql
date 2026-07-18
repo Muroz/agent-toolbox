@@ -130,12 +130,18 @@ CREATE TABLE IF NOT EXISTS judge_verdicts (
 
 CREATE INDEX IF NOT EXISTS idx_verdicts_run ON judge_verdicts(run_id);
 
--- Session-independent pointer to the currently-open tracked run (if any), so a
--- new session can discover and (future) resume it.
-CREATE TABLE IF NOT EXISTS open_run (
-    id              INTEGER PRIMARY KEY CHECK (id = 1),
-    run_id          TEXT REFERENCES runs(run_id),
-    opened_at       TEXT
+-- Per-session pointer to the tracked run each session is *actively* attaching
+-- turns to. This replaces the old singleton `open_run`, so several sessions can
+-- track different tasks in parallel and a task can be paused/resumed:
+--   * session_id PK  -> a session attaches to at most one tracked run at a time.
+--   * run_id UNIQUE  -> a tracked run is active in at most one session at a time.
+-- A tracked run that is open (runs.ended_at IS NULL, no outcome) but has NO row
+-- here is PAUSED: it receives no turns and is resumable with /track-resume.
+-- Only /track-done finalizes a run; SessionEnd merely detaches (auto-pauses) it.
+CREATE TABLE IF NOT EXISTS active_tracked (
+    session_id      TEXT PRIMARY KEY,
+    run_id          TEXT NOT NULL UNIQUE REFERENCES runs(run_id) ON DELETE CASCADE,
+    attached_at     TEXT NOT NULL
 );
 
 -- Maps a session to the run that owns its turns. A passive run owns exactly one
