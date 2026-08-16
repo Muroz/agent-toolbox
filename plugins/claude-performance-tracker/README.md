@@ -71,6 +71,15 @@ Have the LLM judge score recent runs against the rubric:
 /usage-report          # pick "degradation" for the per-model trend
 ```
 
+**Flow 5 — Turn the history into durable guidance**
+
+Once you have a handful of tracked/evaluated runs, distill what works into a playbook you can
+re-read (and paste into `CLAUDE.md`):
+
+```
+/usage-lessons         # writes lessons.md: what works, watch-outs, prompt habits, drift
+```
+
 See [Commands](#commands) for the full list and the equivalent `cpt` CLI calls.
 
 ---
@@ -225,6 +234,12 @@ EAV layout (`subject_type` `run`|`prompt`, `dimension`, `score`, `rationale`,
 `rubric_version`), so adding a dimension to `rubric.yaml` needs no schema change. The rubric
 version is read without needing a YAML library.
 
+Each rubric dimension carries concrete **0/1/2 calibration anchors** so scores stay comparable
+across runs and resist reward-hacking (length, tool-count, and confident phrasing are never
+evidence). `/evaluate-run --verify` runs a **second** judge pass and `cpt eval reconcile`
+flags any dimension where the passes differ by more than a point — surfaced on the run
+scorecard. Single-pass stays the default; verification is opt-in.
+
 ### Reporting (`report.py`)
 
 All numbers are computed at read time from the raw `runs`/`turns`/`scores` tables — nothing is
@@ -234,9 +249,18 @@ pre-aggregated — so any new report or exporter is just another query.
   subagents ran).
 - `compare` — cost-per-success ranking bucketed by `{task_type × size}`, with a small-sample
   guard.
+- `recommend` — the actionable form of `compare`: the cheapest-per-success approach for a
+  given `{task_type × size}` (or the best per bucket). Surfaced automatically at `/track` time.
+- `antipatterns` — recurring friction across runs, worst first, with the share landing in a
+  bad outcome and where each clusters; friction signals with no matching rubric dimension are
+  flagged as candidates to add (incident → eval synthesis). Also the weakest prompt habits.
 - `degradation` — efficiency/friction trend per `{model × period}`, plus average judge score.
 - `run <id>` — the full scorecard for one run, including the judge verdict and per-prompt
-  quality (joined through `scores`).
+  quality (joined through `scores`), and a judge-agreement note when a run has >1 verdict.
+
+`recommend`/`antipatterns` and the `/usage-lessons` evidence pack are all derived by
+`insights.py` — a read-time aggregation layer over the same raw `runs`/`turns`/`scores` tables,
+so they add no storage and stay source-agnostic like every other report.
 
 ---
 
@@ -260,11 +284,13 @@ flowchart TD
     subgraph Skills [You run these · skills]
       direction TB
       TR["/track · /track-done · /track-pause<br/>/track-resume · /track-list<br/>per-session tracked-run lifecycle + outcome"]
-      EV["/evaluate-run<br/>score run quality"]
-      RP["/usage-report<br/>read reports"]
+      EV["/evaluate-run<br/>score run quality (+ --verify)"]
+      RP["/usage-report<br/>overview · compare · recommend<br/>antipatterns · degradation · run"]
+      LE["/usage-lessons<br/>synthesize durable playbook"]
     end
 
     UE[[usage-evaluator subagent<br/>Haiku · rubric scoring]]
+    LS[[lessons-synthesizer subagent<br/>Haiku · playbook from evidence pack]]
     DB[("usage.db<br/>runs · turns · scores<br/>judge_verdicts · sessions · active_tracked")]
 
     T --> ST
@@ -279,12 +305,16 @@ flowchart TD
     EV --> UE
     UE -->|verdict JSON| EV
     EV -->|save verdict + EAV scores| DB
-    DB -->|read at query time| RP
+    DB -->|read at query time<br/>insights.py aggregations| RP
     RP -->|markdown tables| User([you])
+    DB -->|insights context<br/>evidence pack| LE
+    LE --> LS
+    LS -->|playbook markdown| LE
+    LE -->|lessons.md / CLAUDE.md block| User
 ```
 
 Every skill runs through the `cpt` launcher on your `PATH`: `cpt track …`, `cpt report …`,
-`cpt eval …`.
+`cpt eval …`, `cpt insights …`.
 
 ---
 
@@ -315,8 +345,9 @@ Raw facts only — derived/comparison metrics are computed in `report.py`.
 | `/track-pause` | Detach this session's tracked run without finalizing it (keeps it resumable). |
 | `/track-resume` | Reattach a paused run to this session (by id or label) — even across sessions. |
 | `/track-list` | Show open tracked runs and whether each is active (and where) or paused. |
-| `/usage-report` | Render `overview` / `compare` / `degradation` / `run <id>`. |
-| `/evaluate-run` | Score run(s) with the `usage-evaluator` subagent. |
+| `/usage-report` | Render `overview` / `compare` / `recommend` / `antipatterns` / `degradation` / `run <id>`. |
+| `/usage-lessons` | Synthesize a durable, git-shareable playbook from all runs (`lessons-synthesizer` subagent). |
+| `/evaluate-run` | Score run(s) with the `usage-evaluator` subagent (`--verify` runs a second-opinion pass). |
 
 Under the hood (also usable directly):
 
@@ -327,11 +358,16 @@ cpt track pause  --session-id "$SID"
 cpt track resume --session-id "$SID" --run "<run-id-or-label>"
 cpt track done   --session-id "$SID" --outcome success --satisfaction 4   # or --run <id>
 cpt track list
-cpt report                       # overview
-cpt report compare --by model    # or --by mode|subagent|skill|effort, --min N
+cpt report                                     # overview
+cpt report compare --by model                  # or --by mode|subagent|skill|effort, --min N
+cpt report recommend --type refactor --size L  # actionable "use approach Z"
+cpt report antipatterns --since 30d            # recurring friction + rubric candidates
 cpt report degradation --period month
 cpt report run <run_id>
+cpt insights context                           # evidence pack for /usage-lessons
+cpt insights lessons-path                      # default lessons.md location
 cpt eval list-unjudged
+cpt eval reconcile --run-id <run_id>           # disagreement across judge passes
 ```
 
 ---
@@ -415,9 +451,10 @@ skills include a cache-glob fallback for when it isn't found.
 claude-performance-tracker/
 ├── .claude-plugin/plugin.json
 ├── hooks/hooks.json                 # SessionStart · UserPromptSubmit · Stop · SubagentStop · SessionEnd
-├── bin/cpt                          # launcher/multiplexer: ingest | track | report | eval (also on PATH)
-├── agents/usage-evaluator.md        # Haiku judge (agent-behaviour + prompt quality)
-├── skills/{track,track-done,track-pause,track-resume,track-list,usage-report,evaluate-run}/SKILL.md
+├── bin/cpt                          # launcher/multiplexer: ingest | track | report | eval | insights (also on PATH)
+├── agents/usage-evaluator.md         # Haiku judge (agent-behaviour + prompt quality)
+├── agents/lessons-synthesizer.md     # Haiku playbook synthesizer (for /usage-lessons)
+├── skills/{track,track-done,track-pause,track-resume,track-list,usage-report,usage-lessons,evaluate-run}/SKILL.md
 ├── scripts/
 │   ├── db.py            # data-dir resolution + idempotent schema init
 │   ├── schema.sql       # runs · turns · scores · judge_verdicts · sessions · active_tracked
@@ -426,10 +463,11 @@ claude-performance-tracker/
 │   ├── store.py         # run/turn persistence, tracked-run lifecycle, finalize
 │   ├── signals.py       # deterministic signal summary derivation
 │   ├── infer_outcome.py # passive-run outcome heuristic
-│   ├── evaluate.py      # list-unjudged · context · persist
+│   ├── evaluate.py      # list-unjudged · context · persist · reconcile
+│   ├── insights.py      # read-time aggregations (bucket winners, friction, lessons pack)
 │   ├── rubric.py        # rubric version/keys (no YAML dep)
-│   ├── rubric.yaml      # the editable rubric (versioned)
-│   └── report.py        # overview · compare · degradation · run
+│   ├── rubric.yaml      # the editable rubric (versioned, with calibration anchors)
+│   └── report.py        # overview · compare · recommend · antipatterns · degradation · run
 └── tests/               # one test module per slice, stdlib unittest
 ```
 
@@ -476,5 +514,10 @@ Foundations are laid for each; none requires a rewrite:
 - ~~**Cross-session tracked runs**~~ — **shipped**: per-session tracking with
   `/track-pause` / `/track-resume` lets a run be paused and resumed in a later (or
   different) session, and lets sessions track different tasks in parallel.
-- **Scheduled digest**, **live statusline**, **real-time prompt coaching**, and richer
-  **exporters** (JSON/CSV/HTML/dashboard) over the same raw tables.
+- ~~**Closing the loop**~~ — **shipped**: `recommend` (actionable approach routing),
+  `antipatterns` (incident → eval synthesis), `/usage-lessons` (durable, git-shareable
+  playbook synthesized from the run history), and judge hardening (calibration anchors +
+  opt-in second-opinion `--verify`).
+- **Scheduled digest** (auto-run `/usage-lessons`), **live statusline**, **real-time prompt
+  coaching**, persisted **anti-pattern promotion state**, and richer **exporters**
+  (JSON/CSV/HTML/dashboard) over the same raw tables.

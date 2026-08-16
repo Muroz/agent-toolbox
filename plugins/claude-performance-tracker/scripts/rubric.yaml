@@ -6,13 +6,21 @@
 #
 # Dimensions are data, not code: add a new entry here to start scoring it. The
 # storage shape (scores EAV) requires no migration for new dimensions.
+#
+# Each dimension carries `anchors` — concrete 0/1/2 examples that pin the scale
+# so scores are calibrated across runs and resist reward-hacking (verbosity,
+# tool-spam, and confident-sounding rationales are not themselves worth points).
 
-version: "1"
+version: "2"
 
 scale:
   min: 0
   max: 2
-  guidance: "0 = absent/poor, 1 = partial, 2 = clean/strong"
+  guidance: >
+    0 = absent/poor, 1 = partial, 2 = clean/strong. Score the observed behaviour
+    against the anchors, not the tone. Length, number of tool calls, and how
+    confident the writing sounds are never evidence — only what actually happened
+    in the transcript is. When evidence is thin, prefer 1 over an unsupported 0 or 2.
 
 # Scored once per run, from the run transcript.
 agent_behavior:
@@ -20,30 +28,74 @@ agent_behavior:
     description: >
       Did the agent deflect responsibility, defer decisions it could make, or
       hedge instead of acting? Lower is worse.
+    anchors:
+      "0": "punted a decision it had enough context to make, or asked the user to do its work"
+      "1": "mostly acted but hedged or sought sign-off on a call it could have owned"
+      "2": "took ownership end-to-end; made and executed reasonable calls itself"
   - key: unnecessary_permission_seeking
     description: >
       Did it ask permission for actions already authorized or trivially safe?
+    anchors:
+      "0": "repeatedly asked to run clearly-safe, already-authorized actions"
+      "1": "one avoidable confirmation prompt"
+      "2": "proceeded on safe/authorized actions; asked only where genuinely warranted"
   - key: reasoning_loops
     description: >
       Did it revisit the same dead ends or re-derive settled facts?
+    anchors:
+      "0": "cycled through the same dead end or re-read settled context 3+ times"
+      "1": "one visible re-derivation or backtrack"
+      "2": "moved forward; established facts stayed established"
   - key: blind_edits
     description: >
       Did it edit files it had not read, or act without gathering needed context?
+    anchors:
+      "0": "edited a file it never read (and didn't create) / acted with no context"
+      "1": "thin context before an edit, but not blind"
+      "2": "read or created the context it needed before every edit"
   - key: premature_stopping
     description: >
       Did it stop before the task was actually complete or verified?
+    anchors:
+      "0": "stopped with the task unfinished or unverified and claimed done"
+      "1": "finished the work but left verification to the user"
+      "2": "completed and verified before stopping"
 
 # Scored per user prompt, from the turn's prompt text + surrounding context.
 prompt_quality:
   - key: clarity
     description: "Is the ask unambiguous?"
+    anchors:
+      "0": "ambiguous — multiple reasonable readings of what's wanted"
+      "1": "mostly clear with one soft spot"
+      "2": "unambiguous ask"
   - key: specificity
     description: "Concrete and well-scoped vs vague?"
+    anchors:
+      "0": "vague (\"make it better\") with nothing concrete to act on"
+      "1": "some concrete detail, some hand-waving"
+      "2": "concrete: names the target, the change, the constraints"
   - key: context_sufficiency
     description: "Did the user supply the files/constraints/examples needed?"
+    anchors:
+      "0": "no files/constraints/examples given though the task needed them"
+      "1": "partial context; the agent had to hunt for the rest"
+      "2": "supplied the files/constraints/examples needed to start"
   - key: scope
     description: "A single bounded task vs sprawling/multi-headed?"
+    anchors:
+      "0": "many unrelated asks bundled into one prompt"
+      "1": "one main task with a side quest or two"
+      "2": "a single bounded task"
   - key: success_criteria
     description: "Is 'done' defined?"
+    anchors:
+      "0": "no notion of what finished looks like"
+      "1": "implied but unstated success criteria"
+      "2": "'done' is stated (tests pass, output shape, acceptance check)"
   - key: tone
     description: "Neutral/constructive vs frustration. (Descriptive, not a judgment of the user.)"
+    anchors:
+      "0": "frustrated/terse in a way that omits information"
+      "1": "neutral"
+      "2": "constructive and collaborative"

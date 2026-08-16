@@ -89,6 +89,58 @@ def persist(conn, run_id: str, verdict: dict) -> dict:
     return {"run_id": run_id, "rubric_version": rv, "scores_written": n}
 
 
+def reconcile(conn, run_id: str, rubric_version: str | None = None) -> dict:
+    """Compare scores across judge passes for a run (the second-opinion check).
+    A dimension scored by more than one pass whose scores differ by >1 point is
+    flagged — that's where the judges genuinely disagree.
+
+    Scoped to one rubric version, defaulting to the newest verdict's. Rubric v2
+    deliberately recalibrates ("prefer 1 over an unsupported 0 or 2"), so
+    comparing a v1 score against a v2 one reports the rubric bump as judge
+    disagreement.
+    """
+    n_verdicts = conn.execute(
+        "SELECT COUNT(*) FROM judge_verdicts WHERE run_id=?", (run_id,)
+    ).fetchone()[0]
+    if rubric_version is None:
+        row = conn.execute(
+            "SELECT rubric_version FROM judge_verdicts WHERE run_id=? "
+            "ORDER BY created_at DESC LIMIT 1", (run_id,)).fetchone()
+        rubric_version = row[0] if row else None
+    n_passes = conn.execute(
+        "SELECT COUNT(*) FROM judge_verdicts WHERE run_id=? AND rubric_version IS ?",
+        (run_id, rubric_version)).fetchone()[0]
+
+    groups: dict = {}
+    for dim, score in conn.execute(
+            """SELECT dimension, score FROM scores
+               WHERE subject_type='run' AND subject_id=? AND score IS NOT NULL
+                 AND rubric_version IS ?""",
+            (run_id, rubric_version)):
+        groups.setdefault(("run", "", dim), []).append(score)
+    for sid, dim, score in conn.execute(
+            """SELECT s.subject_id, s.dimension, s.score FROM scores s
+               JOIN turns t ON t.turn_id = s.subject_id
+               WHERE s.subject_type='prompt' AND t.run_id=? AND s.score IS NOT NULL
+                 AND s.rubric_version IS ?""",
+            (run_id, rubric_version)):
+        groups.setdefault(("prompt", sid, dim), []).append(score)
+
+    disagreements = []
+    for (stype, sid, dim), scores in groups.items():
+        if len(scores) < 2:
+            continue
+        spread = max(scores) - min(scores)
+        if spread > 1:
+            disagreements.append({
+                "subject_type": stype, "subject_id": sid, "dimension": dim,
+                "scores": sorted(scores), "spread": spread})
+    disagreements.sort(key=lambda d: d["spread"], reverse=True)
+    return {"run_id": run_id, "verdicts": n_verdicts,
+            "rubric_version": rubric_version, "passes_compared": n_passes,
+            "disagreements": disagreements}
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Qualitative scoring backbone.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -107,6 +159,13 @@ def main() -> int:
                     help="verdict JSON file; reads stdin if omitted")
     pe.add_argument("--data-dir", default=None)
 
+    rc = sub.add_parser("reconcile")
+    rc.add_argument("--run-id", required=True)
+    rc.add_argument("--rubric-version", default=None,
+                    help="compare passes under this rubric only "
+                         "(default: the newest verdict's)")
+    rc.add_argument("--data-dir", default=None)
+
     args = p.parse_args()
     db.init_db(args.data_dir)
     conn = db.connect(args.data_dir)
@@ -115,6 +174,9 @@ def main() -> int:
             print(json.dumps(list_unjudged(conn, args.limit), indent=2))
         elif args.cmd == "context":
             print(json.dumps(context(conn, args.run_id), indent=2))
+        elif args.cmd == "reconcile":
+            print(json.dumps(
+                reconcile(conn, args.run_id, args.rubric_version), indent=2))
         else:
             raw = (open(args.json_file).read() if args.json_file
                    else sys.stdin.read())

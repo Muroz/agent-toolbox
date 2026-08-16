@@ -8,6 +8,7 @@
 #   cpt track  start|done ...       -> track.py
 #   cpt report [view] ...           -> report.py
 #   cpt eval   list-unjudged|context|persist ...  -> evaluate.py
+#   cpt insights context|lessons-path ...        -> insights.py
 #
 # Python resolution: a project may pin an uninstalled version via a pyenv
 # `.python-version`, which makes a bare `python3` (the pyenv shim) fail before
@@ -26,5 +27,6 @@ case "$sub" in
   track)  exec "$py" "$scripts/track.py" "$@" ;;
   report) exec "$py" "$scripts/report.py" "$@" ;;
   eval)   exec "$py" "$scripts/evaluate.py" "$@" ;;
-  *) echo "usage: cpt {ingest|track|report|eval} ..." >&2; exit 2 ;;
+  insights) exec "$py" "$scripts/insights.py" "$@" ;;
+  *) echo "usage: cpt {ingest|track|report|eval|insights} ..." >&2; exit 2 ;;
 esac

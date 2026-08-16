@@ -23,6 +23,19 @@ session) so the measured envelope is clean.
    - **size** — `S`, `M`, or `L` (rough expected effort).
    - **approach** — optional free text describing the intended approach
      (e.g. "plan-mode + opus-4-8, no subagents").
+
+   **Recommender nudge** — right after the user gives **type** and **size**, and
+   *before* asking for the approach, look up what has historically worked best for
+   this kind of task:
+
+   ```bash
+   cpt report recommend --type <type> --size <size>
+   ```
+
+   If it returns a **confident** recommendation (not "low confidence" / "No
+   self-reported successful runs"), surface it to the user as a suggested default
+   approach before they answer. If it's low-confidence or empty, stay silent — never
+   block or nag. (Same `cpt`-not-on-PATH fallback as step 2, resolving `report.py`.)
 2. Open the run by invoking the tracker CLI. Pass this session's id so capture is scoped
    to this session:
 

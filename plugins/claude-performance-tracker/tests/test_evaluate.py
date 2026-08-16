@@ -52,7 +52,7 @@ class TestEvaluate(unittest.TestCase):
             "SELECT turn_id FROM turns").fetchone()[0]
 
     def test_rubric_version_parses_without_yaml(self):
-        self.assertEqual(rubric.version(), "1")
+        self.assertEqual(rubric.version(), "2")
         self.assertIn("ownership_dodging", rubric.dimension_keys())
 
     def test_list_unjudged_then_excludes_after_persist(self):
@@ -68,7 +68,7 @@ class TestEvaluate(unittest.TestCase):
     def test_context_has_transcripts_and_turns(self):
         ctx = evaluate.context(self.conn, self.run_id)
         self.assertTrue(ctx["transcripts"])
-        self.assertEqual(ctx["rubric_version"], "1")
+        self.assertEqual(ctx["rubric_version"], "2")
         self.assertEqual([t["turn_id"] for t in ctx["turns"]], [self.turn_id])
         self.assertEqual(ctx["turns"][0]["prompt"], "build the feature")
 
@@ -112,7 +112,52 @@ class TestEvaluate(unittest.TestCase):
         rv = self.conn.execute(
             "SELECT rubric_version FROM scores WHERE dimension='reasoning_loops'"
         ).fetchone()[0]
-        self.assertEqual(rv, "1")
+        self.assertEqual(rv, "2")
+
+    def test_reconcile_flags_disagreeing_passes(self):
+        # two judge passes: agree on clarity, disagree by 2 on ownership_dodging
+        evaluate.persist(self.conn, self.run_id, {
+            "overall_grade": "A",
+            "run_scores": [{"dimension": "ownership_dodging", "score": 2}],
+            "prompt_scores": [{"turn_id": self.turn_id, "dimension": "clarity",
+                               "score": 2}]})
+        evaluate.persist(self.conn, self.run_id, {
+            "overall_grade": "C",
+            "run_scores": [{"dimension": "ownership_dodging", "score": 0}],
+            "prompt_scores": [{"turn_id": self.turn_id, "dimension": "clarity",
+                               "score": 2}]})
+        rec = evaluate.reconcile(self.conn, self.run_id)
+        self.assertEqual(rec["verdicts"], 2)
+        dims = {d["dimension"] for d in rec["disagreements"]}
+        self.assertIn("ownership_dodging", dims)   # spread 2 > 1
+        self.assertNotIn("clarity", dims)          # agree exactly
+
+    def test_reconcile_does_not_compare_across_rubric_versions(self):
+        # Same dimension judged under v1 and v2. v2 recalibrates the scale, so
+        # the spread is a rubric change, not a judge disagreement.
+        evaluate.persist(self.conn, self.run_id, {
+            "rubric_version": "1", "overall_grade": "A",
+            "run_scores": [{"dimension": "ownership_dodging", "score": 2}],
+            "prompt_scores": []})
+        evaluate.persist(self.conn, self.run_id, {
+            "rubric_version": "2", "overall_grade": "C",
+            "run_scores": [{"dimension": "ownership_dodging", "score": 0}],
+            "prompt_scores": []})
+        rec = evaluate.reconcile(self.conn, self.run_id)
+        self.assertEqual(rec["rubric_version"], "2")   # newest verdict's
+        self.assertEqual(rec["passes_compared"], 1)    # only one pass at v2
+        self.assertEqual(rec["disagreements"], [])
+        # ...and an older rubric can still be reconciled on request
+        self.assertEqual(
+            evaluate.reconcile(self.conn, self.run_id, "1")["passes_compared"], 1)
+
+    def test_reconcile_single_pass_has_no_disagreements(self):
+        evaluate.persist(self.conn, self.run_id, {
+            "run_scores": [{"dimension": "ownership_dodging", "score": 2}],
+            "prompt_scores": []})
+        rec = evaluate.reconcile(self.conn, self.run_id)
+        self.assertEqual(rec["verdicts"], 1)
+        self.assertEqual(rec["disagreements"], [])
 
 
 if __name__ == "__main__":
