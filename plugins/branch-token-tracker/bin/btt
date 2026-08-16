@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Launcher/multiplexer for the branch-token-tracker CLI. Added to PATH when the
+# plugin is installed, and also invoked directly by the hooks. Resolves the
+# bundled scripts relative to itself, so it works in both installed and
+# --plugin-dir dev modes with no CLAUDE_PLUGIN_* env var.
+#
+#   btt ingest --event <Hook> ...   -> ingest.py   (used by the hooks)
+#   btt report [TICKET] ...         -> report.py
+#
+# Python resolution: a project may pin an uninstalled version via a pyenv
+# `.python-version`, which makes a bare `python3` (the pyenv shim) fail before
+# our code runs. The plugin's scripts are stdlib-only and run on any Python 3.9+,
+# so we force pyenv's `system` interpreter (harmless when pyenv is absent).
+# Override with BTT_PYTHON=/path/to/python3 if needed.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+scripts="$here/../scripts"
+export PYENV_VERSION="${PYENV_VERSION:-system}"
+py="${BTT_PYTHON:-python3}"
+sub="${1:-}"
+shift || true
+case "$sub" in
+  ingest) exec "$py" "$scripts/ingest.py" "$@" ;;
+  report) exec "$py" "$scripts/report.py" "$@" ;;
+  *) echo "usage: btt {ingest|report} ..." >&2; exit 2 ;;
+esac
