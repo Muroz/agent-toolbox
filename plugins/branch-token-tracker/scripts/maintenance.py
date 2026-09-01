@@ -35,6 +35,17 @@ import transcript
 PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
 
 
+def _has_split(t) -> int:
+    """1 when this envelope carries a real per-class breakdown.
+
+    A subagent read from its own transcript has one; a `<task-notification>`
+    aggregate never does. The flag lets the upsert drop a stale aggregate rather
+    than keeping it beside the split and counting the agent twice.
+    """
+    return 1 if (t.input_tokens or t.output_tokens or t.cache_read_tokens
+                 or t.cache_creation_tokens) else 0
+
+
 def find_transcript(session_id: str) -> str | None:
     """A session's transcript is named by its id, under some project dir."""
     hits = glob.glob(os.path.join(PROJECTS_DIR, "*", f"{session_id}.jsonl"))
@@ -102,7 +113,12 @@ def backfill(conn: sqlite3.Connection, verbose: bool = False) -> dict:
                            cache_read_tokens     = MAX(cache_read_tokens, ?),
                            cache_creation_tokens = MAX(cache_creation_tokens, ?),
                            cache_creation_1h_tokens = MAX(cache_creation_1h_tokens, ?),
-                           total_tokens_agg      = MAX(total_tokens_agg, ?),
+                           -- A real per-class split supersedes the bare
+                       -- aggregate; it is the same spend measured properly, not
+                       -- extra spend. Keeping both would double-count the agent
+                       -- in the raw total, which sums the splits AND the agg.
+                       total_tokens_agg = CASE WHEN ? = 1 THEN 0
+                                               ELSE MAX(total_tokens_agg, ?) END,
                            -- NULL means unknown, 0 means it took no time.
                            -- MAX(COALESCE(...)) would quietly turn the
                            -- first into the second on every re-run.
@@ -113,7 +129,7 @@ def backfill(conn: sqlite3.Connection, verbose: bool = False) -> dict:
                     (t.ended_at, t.model, t.agent_type, t.input_tokens,
                      t.output_tokens, t.cache_read_tokens,
                      t.cache_creation_tokens, t.cache_creation_1h_tokens,
-                     t.total_tokens_agg, t.active_ms or 0, t.active_ms or 0, t.num_tool_calls,
+                     _has_split(t), t.total_tokens_agg, t.active_ms or 0, t.active_ms or 0, t.num_tool_calls,
                      t.turn_id))
                 after = conn.execute(
                     "SELECT total_tokens_agg, output_tokens, num_tool_calls "

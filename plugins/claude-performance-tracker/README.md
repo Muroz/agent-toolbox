@@ -176,12 +176,19 @@ The setting is harmless when pyenv is not installed.
   which is stored separately in `total_tokens_agg` and kept out of the weighted-cost maths
   rather than guessed at.
 - **That notification arrives on three different record shapes** — `type=user`,
-  `type=attachment` and `type=queue-operation` — and it is the only record of a backgrounded
-  agent's spend. All three are scanned. Scanning only `type=user`, which 0.5.0 and earlier
-  did, silently dropped every agent whose notification came through as an attachment: in one
-  real session that was two of four agents and 60% of the subagent tokens, and it read as a
-  complete total rather than a gap because the other two were present. `cpt backfill`
-  recovers them from the transcripts on disk.
+  `type=attachment` and `type=queue-operation`. All three are scanned. Scanning only
+  `type=user`, which 0.5.0 and earlier did, silently dropped every agent whose notification
+  came through as an attachment: two of four agents in one real session, and 60% of its
+  subagent tokens.
+- **A subagent's real envelope comes from its own transcript**, at
+  `<slug>/<session-id>/subagents/agent-<id>.jsonl`, which carries the full per-class split.
+  Those logs also discover the agents, so capture no longer depends on a notification
+  arriving or on us recognising its shape. Evidence is ranked — own log > tool result >
+  bare aggregate — and better evidence replaces rather than adds, being the same spend
+  measured more precisely. The bare aggregate is roughly the non-cached tokens, about 40% of
+  real weighted cost, which is why runs with backgrounded agents used to look far cheaper
+  than they were. `cpt backfill` upgrades stored aggregate rows, clearing
+  `total_tokens_agg` on any row that gains a split so the agent is not counted twice.
 - `effort` is read from the top level of each assistant record, so `--by effort` works.
 
 ### Attribution is pinned; the envelope is not

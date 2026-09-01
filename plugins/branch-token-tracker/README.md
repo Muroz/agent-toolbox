@@ -62,19 +62,43 @@ from the `Agent` tool's `toolUseResult` and stored as their own rows (`query_sou
 exist in real transcripts — so in practice subagent spend went unbilled to the ticket
 entirely.
 
-An **async** agent's tool result carries no usage at all — just an `agentId` and a status. Its
-tokens arrive later in a `<task-notification>`, which is the only record of them, and that
-notification turns up on any of three record shapes: `type=user`, `type=attachment`, or
-`type=queue-operation`. All three are scanned. Scanning only `type=user` — which 0.3.0 and
-earlier did — dropped every agent whose notification came through as an attachment; in one
-real session that was two of four agents and 60% of the subagent tokens, and it read as a
-complete total rather than a gap because the other two were present. `btt backfill` recovers
-them.
+An **async** agent's tool result carries no usage at all — just an `agentId` and a status.
+Its real envelope comes from its own transcript, which sits beside the session's:
 
-A notification reports a bare `<subagent_tokens>` total with no per-class split, so it lands
-in `total_tokens_agg` and is counted in the raw total but deliberately left out of the
-weighted figure rather than being split by guesswork. Agent-heavy tickets therefore show a
-weighted cost that excludes their backgrounded agents.
+```
+<projects>/<slug>/<session-id>.jsonl                        # the session
+<projects>/<slug>/<session-id>/subagents/agent-<id>.jsonl   # one per agent
+```
+
+Those logs are also how agents are **discovered**. An agent that left a log spent tokens
+whether or not the main transcript ever mentioned it, so capture does not depend on a
+notification arriving, or on us recognising the shape it arrives in.
+
+That matters because notifications are the fragile part. One arrives on any of three record
+shapes — `type=user`, `type=attachment`, `type=queue-operation` — and scanning only the first,
+which 0.3.0 and earlier did, dropped every agent whose notification came through as an
+attachment: two of four agents in one real session, and 60% of its subagent tokens. All three
+are scanned now, and the log gives the answer even when none of them arrives.
+
+Evidence is ranked, best wins, and better evidence *replaces* rather than adds — it is the
+same spend measured more precisely:
+
+| rank | source | what it gives |
+| --- | --- | --- |
+| 3 | the agent's own log | the full per-class split |
+| 2 | a completed `Agent` tool result | real usage, when present |
+| 1 | `<subagent_tokens>` in a notification | one bare number |
+
+Only the bare number cannot be weighted — output bills 5x input and cache writes 1.25x, so a
+single total cannot be split by guesswork. It lands in `total_tokens_agg`, counts toward the
+raw total, and stays out of the weighted figure. Before 0.6.0 that was the *only* subagent
+evidence, so agent-heavy tickets understated their cost badly: measured against the logs, the
+aggregate is roughly the non-cached tokens, about 40% of the real weighted cost. In one
+session four agents reported 239,102 against a true weighted cost of 624,230.
+
+`btt backfill` upgrades stored aggregate rows to the real split. A row that gains a split has
+its `total_tokens_agg` cleared in the same write — the raw total sums the splits *and* the
+aggregate, so keeping both would count the agent twice.
 
 ### Weighted vs raw tokens
 

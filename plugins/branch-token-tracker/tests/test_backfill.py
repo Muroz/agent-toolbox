@@ -151,6 +151,59 @@ class BackfillTest(unittest.TestCase):
         self.assertEqual(stats["added"], 0)
         self.assertEqual(len(self._rows()), 2)  # the originals survive untouched
 
+    def test_a_real_split_replaces_a_stored_aggregate(self):
+        """The double-count trap.
+
+        A row captured before the subagent log was read holds a bare
+        `total_tokens_agg` and no split. Backfill now supplies the real split.
+        `MAX()` on every column would keep BOTH — and the raw total sums the
+        splits and the aggregate, so the agent would be counted twice.
+        """
+        import json as _json
+        # a stored aggregate-only subagent row, as an older parser left it
+        conn = db.connect(str(self.data))
+        conn.execute(
+            "INSERT INTO turns (turn_id, session_id, project, branch, ticket,"
+            " started_at, query_source, is_prompt, total_tokens_agg)"
+            " VALUES ('agent:bg9', ?, 'proj', 'feature/PROJ-1', 'PROJ-1',"
+            " '2026-09-01T10:02:00Z', 'subagent', 0, 9999)", (self.sid,))
+        conn.commit(); conn.close()
+
+        # ...and the agent's own log, which has the real envelope
+        sub = self.projects / self.sid / "subagents"
+        sub.mkdir(parents=True, exist_ok=True)
+        with open(sub / "agent-bg9.jsonl", "w") as fh:
+            fh.write(_json.dumps({
+                "type": "assistant", "uuid": "s1",
+                "timestamp": "2026-09-01T10:02:00Z",
+                "message": {"role": "assistant", "id": "sm1",
+                            "model": "claude-opus-5",
+                            "content": [{"type": "text", "text": "ok"}],
+                            "usage": {"input_tokens": 2, "output_tokens": 500,
+                                      "cache_read_input_tokens": 40000,
+                                      "cache_creation_input_tokens": 3000}}}) + "\n")
+
+        self._backfill()
+        row = self._rows()["agent:bg9"]
+        self.assertEqual(row["output_tokens"], 500)
+        self.assertEqual(row["cache_read_tokens"], 40000)
+        self.assertEqual(row["total_tokens_agg"], 0,
+                         "stale aggregate kept beside the split — double count")
+        # the row's attribution is still the one it was captured under
+        self.assertEqual(row["ticket"], "PROJ-1")
+
+    def test_an_aggregate_only_row_keeps_its_aggregate(self):
+        """No log on disk: the bare total is still the best evidence there is."""
+        conn = db.connect(str(self.data))
+        conn.execute(
+            "INSERT INTO turns (turn_id, session_id, project, branch, ticket,"
+            " started_at, query_source, is_prompt, total_tokens_agg)"
+            " VALUES ('agent:gone', ?, 'proj', 'b', 'PROJ-1',"
+            " '2026-09-01T10:02:00Z', 'subagent', 0, 777)", (self.sid,))
+        conn.commit(); conn.close()
+        self._backfill()
+        self.assertEqual(self._rows()["agent:gone"]["total_tokens_agg"], 777)
+
 
 if __name__ == "__main__":
     unittest.main()

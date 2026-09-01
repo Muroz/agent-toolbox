@@ -48,9 +48,10 @@ there is nothing to start or stop.
    For a `--by` report, say what the trend is rather than restating the rows.
 
    Rank on **weighted** tokens, not the raw total: raw is ~95% cache reads, which bill at a
-   tenth of input, so it ranks by session length rather than cost. Note also that a
-   backgrounded subagent reports only a bare total, which lands in the raw column and is
-   deliberately left out of weighted — so an agent-heavy ticket costs more than weighted says.
+   tenth of input, so it ranks by session length rather than cost. Subagent spend is included
+   in weighted, read from each agent's own transcript. The exception is an agent whose log is
+   gone, which leaves only a bare total — it shows in raw and is left out of weighted, since a
+   single number cannot be split across classes that bill at 1x, 5x and 0.1x.
 
    Timestamps are stored in UTC but every bound and bucket is local, so the days in the
    output are the user's own calendar days.

@@ -27,7 +27,10 @@ transcripts rather than assumed:
     carries only an aggregate `<subagent_tokens>` total. That notification
     arrives on any of three record shapes — `type=user`, `type=attachment`, or
     `type=queue-operation` — so all three must be scanned; see
-    `notification_text`.
+    `notification_text`. That aggregate is a last resort: the agent's OWN
+    transcript, at `<session-id>/subagents/agent-<id>.jsonl`, carries the full
+    per-class split, and the directory is also how agents are discovered, so
+    capture does not depend on a notification arriving at all.
   * `effort` sits at the top level of an assistant record, not inside `message`.
   * `usage.cache_creation` splits cache writes into 5m and 1h TTL buckets, which
     are billed at 1.25x and 2x input respectively — worth keeping apart.
@@ -38,6 +41,7 @@ transcripts rather than assumed:
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -250,24 +254,109 @@ def notification_text(rec: dict) -> str:
     return text
 
 
-def _merge_agent(agents: dict, turn: "Turn", rich: bool = False) -> None:
+# How good an agent's envelope is, worst to best. Only the top rank carries a
+# real per-class split; the others are approximations of it.
+RANK_AGGREGATE = 1   # <subagent_tokens>: one bare number, no split
+RANK_TOOL_RESULT = 2 # a completed Agent tool result: real usage, if present
+RANK_OWN_LOG = 3     # the subagent's own transcript: the whole envelope
+
+
+def _merge_agent(agents: dict, ranks: dict, turn: "Turn", rank: int) -> None:
     """Keep the best envelope per agent id.
 
-    A rich `Agent` tool result — a real per-class usage split — always beats an
-    aggregate. Between two aggregates keep the LARGER: the same task-id notifies
-    more than once (the payload says so outright) and `<subagent_tokens>` is
-    cumulative for the agent, so the largest is the complete figure and taking it
-    can never double-count. First-wins, which this used to do, would freeze an
-    agent at its first notification and lose everything it did after a resume.
+    Better-ranked evidence always wins outright — it is the same spend measured
+    more precisely, never additional spend, so it replaces rather than adds.
+
+    Between two aggregates keep the LARGER: the same task-id notifies more than
+    once (the payload says so outright) and `<subagent_tokens>` is cumulative for
+    the agent, so the largest is the complete figure and taking it can never
+    double-count. First-wins, which this used to do, would freeze an agent at its
+    first notification and lose everything it did after a resume.
     """
     prev = agents.get(turn.turn_id)
-    if prev is None or rich:
+    if prev is None or rank > ranks.get(turn.turn_id, 0):
         agents[turn.turn_id] = turn
+        ranks[turn.turn_id] = rank
         return
-    if prev.total_tokens_agg == 0:
-        return  # prev is a rich envelope; an aggregate must not displace it
-    if turn.total_tokens_agg > prev.total_tokens_agg:
+    if rank < ranks.get(turn.turn_id, 0):
+        return
+    if rank == RANK_AGGREGATE and turn.total_tokens_agg > prev.total_tokens_agg:
         agents[turn.turn_id] = turn
+
+
+def _agent_ids_on_disk(main_path: str) -> set:
+    """Every subagent that left a log for this session.
+
+    Discovering agents from the directory rather than only from the main
+    transcript means capture does not depend on a notification arriving, or on
+    us recognising the shape it arrives in.
+    """
+    base = main_path[:-6] if main_path.endswith(".jsonl") else main_path
+    try:
+        names = os.listdir(os.path.join(base, "subagents"))
+    except OSError:
+        return set()
+    return {n[len("agent-"):-len(".jsonl")] for n in names
+            if n.startswith("agent-") and n.endswith(".jsonl")}
+
+
+def _subagent_log(main_path: str, agent_id: str) -> str | None:
+    """A subagent's own transcript, which sits beside the session's.
+
+        <projects>/<slug>/<session-id>.jsonl          <- the main transcript
+        <projects>/<slug>/<session-id>/subagents/agent-<id>.jsonl
+
+    This is the only place a subagent's real per-class usage exists. The async
+    `Agent` tool result carries no usage at all and the `<task-notification>`
+    reports one bare number, so without this file a subagent's spend can only be
+    approximated — and the bare number turns out to be roughly the non-cached
+    tokens, about 40% of the real weighted cost.
+    """
+    base = main_path[:-6] if main_path.endswith(".jsonl") else main_path
+    p = os.path.join(base, "subagents", f"agent-{agent_id}.jsonl")
+    return p if os.path.exists(p) else None
+
+
+def _subagent_meta(log_path: str) -> dict:
+    """`agent-<id>.meta.json` alongside the log: agentType, description, depth."""
+    meta = log_path[:-6] + ".meta.json" if log_path.endswith(".jsonl") else ""
+    try:
+        with open(meta, "r", errors="replace") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _agent_turn_from_log(main_path: str, agent_id: str, seq: int,
+                         fallback_ts: str | None) -> "Turn | None":
+    """A subagent's full envelope, read from its own transcript.
+
+    Deliberately reuses `_finalize`, so a subagent's tokens are counted by
+    exactly the same rules as a main turn — deduped by `message.id`, split by
+    class, idle gaps capped — rather than by a parallel implementation that
+    could drift.
+    """
+    log = _subagent_log(main_path, agent_id)
+    if not log:
+        return None
+    turn = Turn(turn_id=f"agent:{agent_id}", seq=seq, query_source="subagent",
+                is_prompt=False,
+                agent_type=_subagent_meta(log).get("agentType"))
+    for rec in _load(log):
+        ts = rec.get("timestamp")
+        if ts:
+            turn._stamps.append(ts)
+        if rec.get("type") != "assistant":
+            continue
+        mid = (rec.get("message") or {}).get("id") or rec.get("uuid")
+        if mid:
+            turn._msgs[mid] = rec
+    if not turn._msgs:
+        return None
+    turn.started_at = min(turn._stamps) if turn._stamps else fallback_ts
+    _finalize(turn)
+    return turn
 
 
 def parse_turns(path: str, include_sidechain: bool = False) -> list[Turn]:
@@ -278,10 +367,12 @@ def parse_turns(path: str, include_sidechain: bool = False) -> list[Turn]:
     folded into — or, as before, truncating — the prompt that launched it.
 
     `include_sidechain` is accepted for backwards compatibility and ignored:
-    sidechain records do not appear in Claude Code transcripts.
+    no sidechain record appears in a *main* transcript. They do appear inside a
+    subagent's own log, which is read separately — see `_agent_turn_from_log`.
     """
     rows = _load(path)
     turns: list[Turn] = []
+    ranks: dict = {}
     agents: dict[str, Turn] = {}
     cur: Turn | None = None
 
@@ -299,7 +390,7 @@ def parse_turns(path: str, include_sidechain: bool = False) -> list[Turn]:
         if note:
             nt = _notification_turn(note, len(turns), rec.get("timestamp"))
             if nt is not None:
-                _merge_agent(agents, nt)
+                _merge_agent(agents, ranks, nt, RANK_AGGREGATE)
 
         if _is_user_record(rec):
             text = message_text(rec)
@@ -339,9 +430,27 @@ def parse_turns(path: str, include_sidechain: bool = False) -> list[Turn]:
         if isinstance(tur, dict) and tur.get("agentId"):
             at = _agent_turn(tur, len(turns), rec.get("timestamp"))
             if at is not None:
-                _merge_agent(agents, at, rich=True)
+                _merge_agent(agents, ranks, at, RANK_TOOL_RESULT)
 
     flush()
+
+    # Take every agent's envelope from its own log where one exists. A
+    # notification gives one bare number and an async tool result gives none;
+    # the log has the full per-class split, which is what puts subagent spend
+    # into the weighted cost on the same footing as a main turn.
+    #
+    # The logs on disk are the source of truth for WHICH agents ran, not just
+    # how much they cost. Relying on the main transcript to name them makes
+    # capture hostage to the notification arriving and being recognised — which
+    # is exactly how an entire delivery channel went unnoticed. An agent with a
+    # log and no notification is still an agent that spent tokens.
+    for agent_id in sorted(_agent_ids_on_disk(path)
+                           | {k.split("agent:", 1)[-1] for k in agents}):
+        prev = agents.get(f"agent:{agent_id}")
+        full = _agent_turn_from_log(path, agent_id, len(turns),
+                                    prev.started_at if prev else None)
+        if full is not None:
+            _merge_agent(agents, ranks, full, RANK_OWN_LOG)
 
     for turn in turns:
         _finalize(turn)
