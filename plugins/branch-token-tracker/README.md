@@ -108,6 +108,59 @@ Nothing here can raise: a malformed regex, an unreadable config, a detached HEAD
 outside a repo all degrade to the fallback. This code runs inside a session hook, so failing
 loudly would mean interrupting real work.
 
+### Worked example: ClickUp ids
+
+The default patterns assume a tracker whose ids end in digits. ClickUp's do not —
+`CU-86e31q7e3` is base36 — and the failure is not a clean miss. `[A-Z][A-Z0-9]+-\d+` matches
+the *prefix* of such an id and stops at the first letter, so a branch called
+`Add-target-count-CU-86e31q7e3` is silently filed under `CU-86`. Two different tasks can
+truncate to the same id and have their costs merged into one row, which looks like a real
+total rather than a bug. Repo-level `.branch-tokens.json`:
+
+```json
+{
+  "patterns": [
+    "(?P<id>CU-[0-9a-z]+)",
+    "(?P<id>[A-Z][A-Z0-9]+-\\d+)",
+    "(?P<id>#\\d+)"
+  ],
+  "fallback": "unassigned",
+  "uppercase": false
+}
+```
+
+| branch | default | with the config above |
+| --- | --- | --- |
+| `Add-target-count-CU-86e31q7e3` | `CU-86` | `CU-86e31q7e3` |
+| `dz/CU-8695abc12/wip` | `CU-8695` | `CU-8695abc12` |
+| `PROJ-412-still-jira` | `PROJ-412` | `PROJ-412` |
+| `fix-issue-#883` | `#883` | `#883` |
+
+Three things that are easy to get wrong here, all of which apply to any custom scheme:
+
+- **Order matters.** The ClickUp pattern has to come *first*. First match wins, and the JIRA
+  pattern happily matches `CU-86` out of the same branch — put it second and you get the
+  truncated id back.
+- **`patterns` replaces the defaults, it does not extend them.** The layered config is a dict
+  update, which is why JIRA and `#883` are repeated above. Drop them only if the repo has no
+  other scheme.
+- **`uppercase` applies to the extracted id, not to the branch.** Matching is always
+  case-sensitive against the raw branch name. `true` would store `CU-86E31Q7E3`, which is not
+  what you paste back into ClickUp — hence `false` here. The tradeoff is that a branch written
+  `cu-86e31q7e3` then falls to the fallback. If branch casing varies, match either and
+  normalise instead:
+
+  ```json
+  "patterns": ["(?P<id>(?i:cu)-[0-9a-z]+)", "(?P<id>[A-Z][A-Z0-9]+-\\d+)", "(?P<id>#\\d+)"],
+  "uppercase": true
+  ```
+
+Try a pattern before committing it — `$BTT_PATTERN` beats every config file:
+
+```bash
+BTT_PATTERN='(?P<id>CU-[0-9a-z]+)' btt report
+```
+
 ## Reporting
 
 ```bash
