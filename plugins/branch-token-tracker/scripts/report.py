@@ -21,6 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import cost
 import db  # noqa: E402
 import transcript  # noqa: E402
 
@@ -90,9 +91,11 @@ _SUMS = """COUNT(*) AS turns,
            COALESCE(SUM(output_tokens),0) AS output_tokens,
            COALESCE(SUM(cache_read_tokens),0) AS cache_read_tokens,
            COALESCE(SUM(cache_creation_tokens),0) AS cache_creation_tokens,
+           COALESCE(SUM(total_tokens_agg),0) AS total_tokens_agg,
+           COALESCE(SUM({W}),0) AS weighted_tokens,
            COALESCE(SUM(num_tool_calls),0) AS tool_calls,
            MIN(started_at) AS first_seen,
-           MAX(ended_at) AS last_seen"""
+           MAX(ended_at) AS last_seen""".replace("{W}", cost.WEIGHTED_SQL)
 
 
 def _row(r: sqlite3.Row, **extra) -> dict:
@@ -104,11 +107,14 @@ def _row(r: sqlite3.Row, **extra) -> dict:
         "input_tokens": r["input_tokens"], "output_tokens": r["output_tokens"],
         "cache_read_tokens": r["cache_read_tokens"],
         "cache_creation_tokens": r["cache_creation_tokens"],
+        "total_tokens_agg": r["total_tokens_agg"],
+        "weighted_tokens": round(r["weighted_tokens"]),
         "tool_calls": r["tool_calls"],
         "first_seen": r["first_seen"], "last_seen": r["last_seen"],
     })
     d["total_tokens"] = (d["input_tokens"] + d["output_tokens"]
-                         + d["cache_read_tokens"] + d["cache_creation_tokens"])
+                         + d["cache_read_tokens"] + d["cache_creation_tokens"]
+                         + d["total_tokens_agg"])
     d["wall_clock_ms"] = transcript.duration_ms(r["first_seen"], r["last_seen"])
     return d
 
@@ -116,14 +122,22 @@ def _row(r: sqlite3.Row, **extra) -> dict:
 def by_ticket(conn, cutoff: str | None = None, project: str | None = None) -> list:
     where, params = _filters(cutoff, project)
     rows = conn.execute(
-        f"""SELECT ticket, GROUP_CONCAT(DISTINCT branch) AS branches, {_SUMS}
+        f"""SELECT ticket, GROUP_CONCAT(DISTINCT branch) AS branches,
+                   (SELECT model FROM turns m WHERE m.ticket = turns.ticket
+                     AND m.model IS NOT NULL
+                     GROUP BY m.model ORDER BY SUM(m.output_tokens) DESC
+                     LIMIT 1) AS model,
+                   {_SUMS}
             FROM turns WHERE {where}
             GROUP BY ticket""", params).fetchall()
-    out = [_row(r, ticket=r["ticket"],
+    out = [_row(r, ticket=r["ticket"], model=r["model"],
                 branches=sorted((r["branches"] or "").split(","))
                 if r["branches"] else [])
            for r in rows]
-    out.sort(key=lambda d: d["total_tokens"], reverse=True)
+    # Ranked on weighted (input-equivalent) tokens: a raw sum is ~95% cache
+    # reads, which bill at a tenth of input, so it ranks tickets by how long
+    # their sessions were rather than by what they cost.
+    out.sort(key=lambda d: d["weighted_tokens"], reverse=True)
     return out
 
 
@@ -150,6 +164,12 @@ def _note(since: str | None, ok: bool) -> str:
             "`12h`. Showing all time._\n\n")
 
 
+def _usd(row: dict) -> str:
+    """Dollar estimate for a row, when its model is priced and known."""
+    amount = cost.usd(row["weighted_tokens"], row.get("model"))
+    return "—" if amount is None else f"${amount:,.2f}"
+
+
 def render_tickets(rows: list, since: str | None, ok: bool,
                    project: str | None) -> str:
     window = f" (last {since})" if since and ok else ""
@@ -159,19 +179,27 @@ def render_tickets(rows: list, since: str | None, ok: bool,
         return (f"{head}\n\n{_note(since, ok)}No turns captured yet. The hooks "
                 "record them as you work — check back after a session.")
     total = sum(r["total_tokens"] for r in rows)
+    weighted = sum(r["weighted_tokens"] for r in rows)
     body = _table(
         ["ticket", "turns", "sessions", "input", "output", "cache read",
-         "cache create", "total", "wall-clock", "last seen"],
+         "cache create", "weighted", "est. USD", "raw total", "elapsed",
+         "last seen"],
         [[r["ticket"], _n(r["turns"]), _n(r["sessions"]), _n(r["input_tokens"]),
           _n(r["output_tokens"]), _n(r["cache_read_tokens"]),
-          _n(r["cache_creation_tokens"]), _n(r["total_tokens"]),
+          _n(r["cache_creation_tokens"]), _n(r["weighted_tokens"]),
+          _usd(r), _n(r["total_tokens"]),
           _ms(r["wall_clock_ms"]), (r["last_seen"] or "—")[:16]]
          for r in rows])
     parts = [head, ""]
     note = _note(since, ok).rstrip("\n")
     if note:
         parts += [note, ""]
-    parts += [f"**{len(rows)} ticket(s) · {_n(total)} tokens total**", "", body]
+    parts += [f"**{len(rows)} ticket(s) · {_n(weighted)} weighted tokens "
+              f"({_n(total)} raw)**", "", body, "",
+              "_Weighted tokens are input-equivalent units (output 5x, cache "
+              "write 1.25-2x, cache read 0.1x) — the raw total is dominated by "
+              "cache reads and is not a cost. Elapsed is calendar span, not "
+              "working time._"]
     return "\n".join(parts)
 
 
@@ -183,16 +211,17 @@ def render_drilldown(ticket: str, rows: list, since: str | None, ok: bool) -> st
                 "Ticket ids are matched exactly as extracted from the branch — "
                 "run `btt report` to see the ones that exist.")
     total = sum(r["total_tokens"] for r in rows)
+    weighted = sum(r["weighted_tokens"] for r in rows)
     branches = sorted({r["branch"] for r in rows if r["branch"]})
     body = _table(
         ["session", "branch", "project", "turns", "input", "output",
-         "cache read", "total", "started"],
+         "cache read", "weighted", "raw total", "started"],
         [[(r["session_id"] or "—")[:8], r["branch"] or "—", r["project"] or "—",
           _n(r["turns"]), _n(r["input_tokens"]), _n(r["output_tokens"]),
-          _n(r["cache_read_tokens"]), _n(r["total_tokens"]),
-          (r["first_seen"] or "—")[:16]] for r in rows])
-    lead = (f"**{len(rows)} session(s) · {_n(total)} tokens** · "
-            f"branch(es): {', '.join(branches) or '—'}")
+          _n(r["cache_read_tokens"]), _n(r["weighted_tokens"]),
+          _n(r["total_tokens"]), (r["first_seen"] or "—")[:16]] for r in rows])
+    lead = (f"**{len(rows)} session(s) · {_n(weighted)} weighted tokens "
+            f"({_n(total)} raw)** · branch(es): {', '.join(branches) or '—'}")
     return "\n".join([head, "", lead, "", body])
 
 

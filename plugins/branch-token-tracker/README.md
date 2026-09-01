@@ -12,7 +12,7 @@ $ btt report
 
 **3 ticket(s) · 12,481,903 tokens total**
 
-| ticket | turns | sessions | input | output | cache read | cache create | total | wall-clock | last seen |
+| ticket | turns | sessions | input | output | cache read | cache create | weighted | est. USD | raw total | elapsed | last seen |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | PROJ-412 | 41 | 5 | 612 | 214,880 | 8,904,221 | 411,002 | 9,530,715 | 6h 12m | 2026-08-08T14:22 |
 | #883 | 12 | 2 | 98 | 61,004 | 2,401,880 | 96,441 | 2,559,423 | 1h 48m | 2026-08-07T18:05 |
@@ -56,7 +56,24 @@ too, and are excluded — counting them would inflate the turn count several-fol
 records are deduped by `message.id` (last wins), because the same message id repeats as it
 streams and each copy carries the cumulative usage.
 
-Subagent (sidechain) tokens are included: they are spent on the ticket like any other.
+Subagent tokens are included: they are spent on the ticket like any other. They are read
+from the `Agent` tool's `toolUseResult` and stored as their own rows (`query_source =
+'subagent'`, keyed `agent:<agentId>`). This used to rely on sidechain records, which do not
+exist in real transcripts — so in practice subagent spend went unbilled to the ticket
+entirely.
+
+### Weighted vs raw tokens
+
+The headline figure is **weighted** tokens: input-equivalent units, since cache reads bill at
+0.1x input, cache writes at 1.25x (5m) / 2x (1h) and output at 5x. A raw sum of the four
+classes is ~95% cache reads, so ranking tickets by it ranks them by how long their sessions
+were rather than by what they cost. The raw total is still shown, but it is not a cost.
+
+### Live totals for a statusline
+
+`current.json` in the plugin's data dir is rewritten on **every** `Stop` (not only at
+`SessionEnd`, which meant a statusline spent each session showing the previous one's
+numbers), and carries a `updated_at` stamped at write time.
 
 ## Configuring the ticket pattern
 
@@ -166,3 +183,15 @@ Override with `BTT_PYTHON`. The scripts are stdlib-only and run on any Python 3.
 cd plugins/branch-token-tracker
 python3 -m unittest discover -s tests
 ```
+
+
+## ⚠ Uninstall deletes your captured data
+
+`claude plugin uninstall` removes `${CLAUDE_PLUGIN_DATA}` — including `tokens.db` and every
+ticket total in it. Back it up outside that directory first:
+
+```bash
+cp ~/.claude/plugins/data/branch-token-tracker-*/tokens.db ~/tokens.db.bak
+```
+
+Prefer `claude plugin update` (with a version bump) over uninstall/reinstall.

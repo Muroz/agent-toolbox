@@ -88,12 +88,55 @@ def connect(explicit_dir: str | None = None) -> sqlite3.Connection:
     return conn
 
 
-def init_db(explicit_dir: str | None = None) -> None:
-    """Idempotently create the schema. Safe to call on every SessionStart."""
+SCHEMA_VERSION = "2"
+
+# Columns added after a database may already exist. `CREATE TABLE IF NOT EXISTS`
+# is a no-op on an existing table, so without this an upgrade silently keeps the
+# old column set and every hook write fails — invisibly, since hooks swallow
+# their exceptions. Append here whenever schema.sql gains a column.
+ADDED_COLUMNS = (
+    ("turns", "cache_creation_1h_tokens", "INTEGER NOT NULL DEFAULT 0"),
+    ("turns", "total_tokens_agg", "INTEGER NOT NULL DEFAULT 0"),
+    ("turns", "active_ms", "INTEGER"),
+    ("turns", "query_source", "TEXT NOT NULL DEFAULT 'main'"),
+    ("turns", "agent_type", "TEXT"),
+    ("turns", "is_prompt", "INTEGER NOT NULL DEFAULT 1"),
+)
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> set:
+    try:
+        return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+    except sqlite3.Error:
+        return set()
+
+
+def _migrate(conn: sqlite3.Connection) -> list:
+    """Bring an existing database up to the current schema."""
+    applied = []
+    for table, column, decl in ADDED_COLUMNS:
+        cols = _columns(conn, table)
+        if not cols or column in cols:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+            applied.append(f"+{table}.{column}")
+        except sqlite3.Error:
+            pass
+    conn.execute(
+        "INSERT INTO schema_meta (key, value) VALUES ('version', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (SCHEMA_VERSION,))
+    conn.commit()
+    return applied
+
+
+def init_db(explicit_dir: str | None = None) -> list:
+    """Idempotently create AND migrate the schema. Safe on every SessionStart."""
     conn = connect(explicit_dir)
     try:
         conn.executescript(SCHEMA_PATH.read_text())
         conn.commit()
+        return _migrate(conn)
     finally:
         conn.close()
 
@@ -104,5 +147,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Initialize the token database.")
     parser.add_argument("--data-dir", default=None)
     args = parser.parse_args()
-    init_db(args.data_dir)
+    applied = init_db(args.data_dir)
     print(f"initialized {db_path(args.data_dir)}")
+    if applied:
+        print("migrated: " + ", ".join(applied))
