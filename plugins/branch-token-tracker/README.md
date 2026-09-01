@@ -180,13 +180,62 @@ BTT_PATTERN='(?P<id>CU-[0-9a-z]+)' btt report
 ```bash
 btt report                             # every ticket, biggest first
 btt report PROJ-412                    # the sessions and branches behind one ticket
-btt report --since 30d                 # windowed (<n>d / <n>h)
 btt report --project my-repo           # one repo only
 btt report --format csv > tokens.csv   # or --format json
 ```
 
-An unparsable `--since` is reported as ignored rather than silently widening the query to all
-time.
+### Time ranges
+
+`--since` and `--until` each accept a relative window, an absolute date, or an absolute
+datetime:
+
+```bash
+btt report --since 30d                       # relative: <n>d / <n>h
+btt report --since 2026-08-01                # from the start of Aug 1
+btt report --until 2026-08-15                # through the END of Aug 15
+btt report --since 2026-08-01 --until 2026-08-15   # a closed range
+btt report --since 2026-08-01T09:30          # to the minute
+```
+
+A bare `--until` date covers the whole day named. `--since 2026-08-01 --until 2026-08-15` is
+the fortnight you would say out loud, not fourteen days and a truncated fifteenth.
+
+**Absolute values are local.** Timestamps are stored in UTC, and the two disagree about which
+day a late-evening session belongs to — a 9pm session in UTC−3 is stored under the *next* UTC
+date. Bounds and buckets are therefore interpreted in your timezone, so `--since 2026-08-01`
+means your August 1st. Relative windows (`30d`) are unaffected either way.
+
+An unparsable bound is reported as ignored rather than silently widening the query to all time
+under a header that claims otherwise. Each bad bound is named individually; a good one
+alongside it still applies.
+
+### Grouping over time
+
+`--by` groups by local calendar period instead of by ticket — spend over time rather than a
+single total:
+
+```bash
+btt report --by day                    # or week (Monday-start) | month
+btt report --by week --since 2026-08-01
+btt report PROJ-412 --by day           # one ticket's spend, day by day
+```
+
+```
+# Tokens by day
+
+| day | turns | sessions | tickets | output | cache read | weighted | est. USD | raw total | active |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 2026-08-31 | 4 | 1 | 1 | 52,724 | 5,876,275 | 1,129,946 | $5.65 | 6,068,415 | 30m 21s |
+| 2026-09-01 | 15 | 2 | 2 | 133,358 | 31,036,125 | 4,900,210 | $24.50 | 31,973,691 | 1h 12m |
+```
+
+Without a ticket argument each row also counts the distinct tickets worked that period; with
+one, the table is that ticket alone. `--format csv|json` carries the `period` column through,
+so a spend-over-time series exports directly.
+
+The dollar figure prices each bucket on the model that produced most of its output, so a
+bucket that mixed models is an approximation — which is why the exact raw and weighted
+columns sit beside it.
 
 ## Repairing an existing store
 

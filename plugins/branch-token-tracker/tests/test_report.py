@@ -92,7 +92,7 @@ class TestDrilldown(_DB):
         self.assertEqual(sum(r["turns"] for r in rows), 3)
 
     def test_unknown_ticket_is_explained_not_blank(self):
-        out = report.render_drilldown("NOPE-1", [], None, True)
+        out = report.render_drilldown("NOPE-1", [], "", "")
         self.assertIn("No turns recorded for this ticket", out)
 
 
@@ -101,24 +101,26 @@ class TestWindows(_DB):
         recent = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
         _turn(self.conn, ticket="OLD-1", started="2000-01-01T00:00:00Z")
         _turn(self.conn, ticket="NEW-1", started=recent)
-        cutoff, ok = report.parse_window("30d")
+        cutoff, ok = report.parse_bound("30d")
         self.assertTrue(ok)
         rows = report.by_ticket(self.conn, cutoff)
         self.assertEqual([r["ticket"] for r in rows], ["NEW-1"])
 
     def test_unparsable_window_says_so_rather_than_claiming_one(self):
         _turn(self.conn, ticket="PROJ-1", started="2000-01-01T00:00:00Z")
-        cutoff, ok = report.parse_window("2w")
+        cutoff, ok = report.parse_bound("2w")
         self.assertIsNone(cutoff)
         self.assertFalse(ok)
+        bad = [("since", "2w")]
         out = report.render_tickets(
-            report.by_ticket(self.conn, cutoff), "2w", ok, None)
+            report.by_ticket(self.conn, cutoff),
+            report._window("2w", None, bad), report._notes(bad), None)
         self.assertNotIn("(last 2w)", out)
         self.assertIn("Ignoring `--since 2w`", out)
         self.assertIn("PROJ-1", out)          # all-time data still shown
 
     def test_no_window_is_not_an_error(self):
-        self.assertEqual(report.parse_window(None), (None, True))
+        self.assertEqual(report.parse_bound(None), (None, True))
 
 
 class TestFormats(_DB):
@@ -129,21 +131,21 @@ class TestFormats(_DB):
         self.rows = report.by_ticket(self.conn)
 
     def test_markdown_is_a_table(self):
-        out = report.render(self.rows, "markdown", ticket=None, since=None,
-                            ok=True, project=None)
+        out = report.render(self.rows, "markdown", ticket=None, window="",
+                            notes="", project=None)
         self.assertIn("| ticket |", out)
         self.assertIn("PROJ-1", out)
         self.assertIn("#883", out)
 
     def test_json_round_trips(self):
-        out = report.render(self.rows, "json", ticket=None, since=None,
-                            ok=True, project=None)
+        out = report.render(self.rows, "json", ticket=None, window="",
+                            notes="", project=None)
         parsed = json.loads(out)
         self.assertEqual({r["ticket"] for r in parsed}, {"PROJ-1", "#883"})
 
     def test_csv_has_a_header_and_one_row_per_ticket(self):
-        out = report.render(self.rows, "csv", ticket=None, since=None,
-                            ok=True, project=None)
+        out = report.render(self.rows, "csv", ticket=None, window="",
+                            notes="", project=None)
         parsed = list(csv.DictReader(io.StringIO(out)))
         self.assertEqual(len(parsed), 2)
         self.assertIn("total_tokens", parsed[0])
