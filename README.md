@@ -8,7 +8,8 @@ A personal Agent toolbox marketplace (Primarily for [Claude Code](https://code.c
 agent-toolbox/
 ├── .claude-plugin/marketplace.json   # lists every installable piece
 └── plugins/
-    └── claude-performance-tracker/   # plugin #1
+    ├── claude-performance-tracker/   # plugin #1
+    └── branch-token-tracker/         # plugin #2
 ```
 
 New pieces are added as subdirectories under `plugins/` and registered as entries in
@@ -32,6 +33,7 @@ Update later with `claude plugin marketplace update agent-toolbox`.
 | Plugin | Description |
 |--------|-------------|
 | [claude-performance-tracker](plugins/claude-performance-tracker) | Measure and qualify how you use agents — token/time/prompt cost per successful outcome, approach comparison, prompt quality, and model-degradation trends. |
+| [branch-token-tracker](plugins/branch-token-tracker) | Attribute token spend to the task-tracker id in your git branch name, so a ticket's real cost is answerable. |
 
 ## Development
 
