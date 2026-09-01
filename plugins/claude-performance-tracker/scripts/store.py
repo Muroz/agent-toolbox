@@ -98,13 +98,18 @@ def capture_session_turns(
                        cache_creation_tokens = MAX(cache_creation_tokens, ?),
                        cache_creation_1h_tokens = MAX(cache_creation_1h_tokens, ?),
                        total_tokens_agg      = MAX(total_tokens_agg, ?),
-                       active_ms             = MAX(COALESCE(active_ms, 0), ?),
+                       -- NULL means unknown, 0 means it took no time.
+                       -- MAX(COALESCE(...)) would quietly turn the first
+                       -- into the second on every re-capture.
+                       active_ms = CASE WHEN ? > COALESCE(active_ms, 0)
+                                        THEN ? ELSE active_ms END,
                        num_tool_calls        = MAX(num_tool_calls, ?)
                    WHERE turn_id = ?""",
                 (t.ended_at, t.model, t.effort, t.agent_type,
                  t.input_tokens, t.output_tokens, t.cache_read_tokens,
                  t.cache_creation_tokens, t.cache_creation_1h_tokens,
-                 t.total_tokens_agg, t.active_ms or 0, t.num_tool_calls,
+                 t.total_tokens_agg, t.active_ms or 0, t.active_ms or 0,
+                 t.num_tool_calls,
                  t.turn_id))
             continue
         conn.execute(

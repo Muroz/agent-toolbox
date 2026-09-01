@@ -175,6 +175,13 @@ The setting is harmless when pyenv is not installed.
   no usage; it reports back later in a `<task-notification>` with only an aggregate total,
   which is stored separately in `total_tokens_agg` and kept out of the weighted-cost maths
   rather than guessed at.
+- **That notification arrives on three different record shapes** — `type=user`,
+  `type=attachment` and `type=queue-operation` — and it is the only record of a backgrounded
+  agent's spend. All three are scanned. Scanning only `type=user`, which 0.5.0 and earlier
+  did, silently dropped every agent whose notification came through as an attachment: in one
+  real session that was two of four agents and 60% of the subagent tokens, and it read as a
+  complete total rather than a gap because the other two were present. `cpt backfill`
+  recovers them from the transcripts on disk.
 - `effort` is read from the top level of each assistant record, so `--by effort` works.
 
 ### Attribution is pinned; the envelope is not

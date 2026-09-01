@@ -24,7 +24,10 @@ transcripts rather than assumed:
     `totalToolUseCount`, `totalDurationMs` — but only once `status` is
     `completed`. A backgrounded agent's launch result is `async_launched` and
     carries no usage; it reports back later in a `<task-notification>` that
-    carries only an aggregate `<subagent_tokens>` total.
+    carries only an aggregate `<subagent_tokens>` total. That notification
+    arrives on any of three record shapes — `type=user`, `type=attachment`, or
+    `type=queue-operation` — so all three must be scanned; see
+    `notification_text`.
   * `effort` sits at the top level of an assistant record, not inside `message`.
   * `usage.cache_creation` splits cache writes into 5m and 1h TTL buckets, which
     are billed at 1.25x and 2x input respectively — worth keeping apart.
@@ -219,6 +222,54 @@ def _notification_turn(text: str, seq: int, ts: str | None) -> Turn | None:
     )
 
 
+def notification_text(rec: dict) -> str:
+    """The `<task-notification>` text in a record, whatever channel it arrived on.
+
+    A backgrounded agent's aggregate spend reaches the main transcript on three
+    different record shapes, and the notification is the ONLY record of that
+    spend — the `Agent` tool result for an async agent carries no usage at all:
+
+      * `type=user`            -> message.content text blocks  (delivered)
+      * `type=attachment`      -> attachment.prompt            (queued_command)
+      * `type=queue-operation` -> content                      (the enqueue)
+
+    Scanning only `type=user`, which this parser used to do, silently dropped
+    every agent whose notification arrived as an attachment. In a real session
+    that was two of four agents and 60% of the subagent tokens — and it looked
+    like a complete total rather than a gap, because the other two were there.
+    """
+    rtype = rec.get("type")
+    if rtype == "attachment":
+        text = (rec.get("attachment") or {}).get("prompt") or ""
+    elif rtype == "queue-operation":
+        text = rec.get("content") or ""
+    else:
+        text = message_text(rec)
+    if not isinstance(text, str) or "<task-notification>" not in text:
+        return ""
+    return text
+
+
+def _merge_agent(agents: dict, turn: "Turn", rich: bool = False) -> None:
+    """Keep the best envelope per agent id.
+
+    A rich `Agent` tool result — a real per-class usage split — always beats an
+    aggregate. Between two aggregates keep the LARGER: the same task-id notifies
+    more than once (the payload says so outright) and `<subagent_tokens>` is
+    cumulative for the agent, so the largest is the complete figure and taking it
+    can never double-count. First-wins, which this used to do, would freeze an
+    agent at its first notification and lose everything it did after a resume.
+    """
+    prev = agents.get(turn.turn_id)
+    if prev is None or rich:
+        agents[turn.turn_id] = turn
+        return
+    if prev.total_tokens_agg == 0:
+        return  # prev is a rich envelope; an aggregate must not displace it
+    if turn.total_tokens_agg > prev.total_tokens_agg:
+        agents[turn.turn_id] = turn
+
+
 def parse_turns(path: str, include_sidechain: bool = False) -> list[Turn]:
     """Parse a transcript into main turns plus one row per subagent invocation.
 
@@ -241,14 +292,20 @@ def parse_turns(path: str, include_sidechain: bool = False) -> list[Turn]:
     for rec in rows:
         rtype = rec.get("type")
 
+        # Scan EVERY record for a task-notification, not just `type=user` ones:
+        # a backgrounded agent reports on whichever of three channels it happens
+        # to use, and that notification is the only record of its spend.
+        note = notification_text(rec)
+        if note:
+            nt = _notification_turn(note, len(turns), rec.get("timestamp"))
+            if nt is not None:
+                _merge_agent(agents, nt)
+
         if _is_user_record(rec):
             text = message_text(rec)
             if is_synthetic_prompt(text):
-                # Not a boundary. A task-notification may still be the only
-                # record of a backgrounded agent's spend.
-                nt = _notification_turn(text, len(turns), rec.get("timestamp"))
-                if nt and nt.turn_id not in agents:
-                    agents[nt.turn_id] = nt
+                # Not a turn boundary: the work it reports belongs to the prompt
+                # that launched the agent. Its tokens were taken just above.
                 continue
             flush()
             cur = Turn(
@@ -282,7 +339,7 @@ def parse_turns(path: str, include_sidechain: bool = False) -> list[Turn]:
         if isinstance(tur, dict) and tur.get("agentId"):
             at = _agent_turn(tur, len(turns), rec.get("timestamp"))
             if at is not None:
-                agents[at.turn_id] = at  # rich result always wins over aggregate
+                _merge_agent(agents, at, rich=True)
 
     flush()
 
