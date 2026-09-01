@@ -36,11 +36,13 @@ def _transcript(path, prompts, produced=True, interrupts=0):
                                            "cache_read_input_tokens": 0,
                                            "cache_creation_input_tokens": 0}}})
     for j in range(interrupts):
+        # How Claude Code really records an interruption: an injected user
+        # record carrying the marker text. `toolUseResult.interrupted` — what
+        # this fixture used to emit — appears in no real transcript.
         rows.append({"type": "user", "uuid": f"int{j}",
                      "timestamp": f"2026-06-28T10:59:{j:02d}Z",
-                     "toolUseResult": {"interrupted": True, "stdout": "", "stderr": ""},
                      "message": {"role": "user",
-                                 "content": [{"type": "tool_result", "content": ""}]}})
+                                 "content": "[Request interrupted by user for tool use]"}})
     with open(path, "w") as fh:
         for r in rows:
             fh.write(json.dumps(r) + "\n")

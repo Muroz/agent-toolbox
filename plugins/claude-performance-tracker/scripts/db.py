@@ -90,12 +90,70 @@ def connect(explicit_dir: str | None = None) -> sqlite3.Connection:
     return conn
 
 
-def init_db(explicit_dir: str | None = None) -> None:
-    """Idempotently create the schema. Safe to call on every SessionStart."""
+SCHEMA_VERSION = "4"
+
+# Columns added after a database may already have been created. `CREATE TABLE IF
+# NOT EXISTS` is a no-op on an existing table, so without this list an upgrade
+# silently keeps the old column set and every hook write fails — invisibly, since
+# hooks swallow their exceptions. Append here whenever schema.sql gains a column.
+ADDED_COLUMNS = (
+    ("turns", "cache_creation_1h_tokens", "INTEGER DEFAULT 0"),
+    ("turns", "total_tokens_agg", "INTEGER DEFAULT 0"),
+    ("turns", "active_ms", "INTEGER"),
+    ("turns", "is_prompt", "INTEGER NOT NULL DEFAULT 1"),
+    ("turns", "agent_type", "TEXT"),
+    ("runs", "cache_creation_1h_tokens", "INTEGER DEFAULT 0"),
+    ("runs", "total_tokens_agg", "INTEGER DEFAULT 0"),
+    ("runs", "active_ms", "INTEGER"),
+    ("runs", "peak_context_tokens", "INTEGER"),
+)
+
+# Tables superseded by a later design that must not be left behind holding data
+# nobody reads. `open_run` was the pre-0.3.0 singleton tracked-run pointer,
+# replaced by the per-session `active_tracked`.
+DROPPED_TABLES = ("open_run",)
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> set:
+    try:
+        return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+    except sqlite3.Error:
+        return set()
+
+
+def _migrate(conn: sqlite3.Connection) -> list[str]:
+    """Bring an existing database up to the current schema. Returns what changed."""
+    applied = []
+    for table, column, decl in ADDED_COLUMNS:
+        cols = _columns(conn, table)
+        if not cols or column in cols:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+            applied.append(f"+{table}.{column}")
+        except sqlite3.Error:
+            pass
+    for table in DROPPED_TABLES:
+        if _columns(conn, table):
+            try:
+                conn.execute(f"DROP TABLE {table}")
+                applied.append(f"-{table}")
+            except sqlite3.Error:
+                pass
+    conn.execute(
+        "INSERT INTO schema_meta (key, value) VALUES ('version', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (SCHEMA_VERSION,))
+    conn.commit()
+    return applied
+
+
+def init_db(explicit_dir: str | None = None) -> list[str]:
+    """Idempotently create AND migrate the schema. Safe on every SessionStart."""
     conn = connect(explicit_dir)
     try:
         conn.executescript(SCHEMA_PATH.read_text())
         conn.commit()
+        return _migrate(conn)
     finally:
         conn.close()
 
@@ -106,5 +164,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Initialize the usage database.")
     parser.add_argument("--data-dir", default=None)
     args = parser.parse_args()
-    init_db(args.data_dir)
+    applied = init_db(args.data_dir)
     print(f"initialized {db_path(args.data_dir)}")
+    if applied:
+        print("migrated: " + ", ".join(applied))

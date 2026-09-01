@@ -76,7 +76,10 @@ class TestRecommend(unittest.TestCase):
             _run(self.conn, out=o)
         b = insights.recommend(self.conn, "feature", "M", "model", 3)
         self.assertTrue(b["confident"])
-        self.assertEqual(b["ranked"][0]["median_total_tokens"], 200)
+        # Ranking is on weighted (input-equivalent) tokens, and these runs are
+        # pure output, which bills at 5x input — so the 200-token median
+        # run is 1000 weighted units.
+        self.assertEqual(b["ranked"][0]["median_weighted_tokens"], 1000)
         # a bucket with no data comes back empty, not crashing
         empty = insights.recommend(self.conn, "debug", "S", "model", 3)
         self.assertEqual(empty["ranked"], [])

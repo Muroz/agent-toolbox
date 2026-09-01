@@ -56,8 +56,10 @@ def _transcript(path: Path) -> None:
         _result(uuid="r2", filePath="/x/app.py",
                 structuredPatch=[{"lines": ["+new line", "-old line", " ctx"]}],
                 interrupted=False),
-        # an interrupted Bash result in turn 1
-        _result(uuid="r3", stdout="", stderr="", interrupted=True),
+        # an interruption in turn 1, in the shape Claude Code actually writes
+        {"type": "user", "uuid": "r3", "timestamp": "2026-06-28T10:05:00Z",
+         "message": {"role": "user",
+                     "content": "[Request interrupted by user for tool use]"}},
         # --- turn 2 (correction cue -> re_prompt)
         {"type": "user", "uuid": "u2", "timestamp": "2026-06-28T10:02:00Z",
          "message": {"role": "user", "content": "no, actually do it differently"}},

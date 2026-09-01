@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import sqlite3
 
+import cost
 import db
 import evaluate
 import insights
@@ -49,6 +50,13 @@ def _ms(ms) -> str:
     return f"{sec}s"
 
 
+def _usd(amount) -> str:
+    """Dollar estimate, or a dash when the model's price is not known."""
+    if amount is None:
+        return "—"
+    return f"${amount:,.2f}"
+
+
 def _table(headers: list[str], rows: list[list]) -> str:
     out = ["| " + " | ".join(headers) + " |",
            "| " + " | ".join("---" for _ in headers) + " |"]
@@ -61,12 +69,17 @@ def _table(headers: list[str], rows: list[list]) -> str:
 
 def render_overview(conn: sqlite3.Connection) -> str:
     tot = conn.execute(
-        """SELECT COUNT(*),
+        f"""SELECT COUNT(*),
                   COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
                   COALESCE(SUM(cache_read_tokens),0),
                   COALESCE(SUM(cache_creation_tokens),0),
                   COALESCE(SUM(num_tool_calls),0),
-                  MIN(started_at), MAX(ended_at)
+                  MIN(started_at), MAX(ended_at),
+                  COALESCE(SUM({cost.WEIGHTED_SQL}),0),
+                  COALESCE(SUM(active_ms),0),
+                  COALESCE(SUM(CASE WHEN is_prompt = 1 AND query_source = 'main'
+                                    THEN 1 ELSE 0 END),0),
+                  COALESCE(SUM(total_tokens_agg),0)
            FROM turns"""
     ).fetchone()
     n_turns = tot[0]
@@ -75,34 +88,55 @@ def render_overview(conn: sqlite3.Connection) -> str:
 
     n_runs = conn.execute(
         "SELECT COUNT(DISTINCT run_id) FROM turns").fetchone()[0]
-    wall = conn.execute(
+    elapsed = conn.execute(
         "SELECT COALESCE(SUM(wall_clock_ms),0) FROM runs").fetchone()[0]
+    weighted, active, n_prompts, agg = tot[8], tot[9], tot[10], tot[11]
     day0 = (tot[6] or "")[:10]
     day1 = (tot[7] or "")[:10]
+
+    rows = [
+        ["input tokens", _n(tot[1])],
+        ["output tokens", _n(tot[2])],
+        ["cache read", _n(tot[3])],
+        ["cache creation", _n(tot[4])],
+        ["**weighted tokens**", f"**{_n(int(weighted))}**"],
+        ["tool calls", _n(tot[5])],
+        ["active time", _ms(active)],
+        ["elapsed span", _ms(elapsed)],
+    ]
+    if agg:
+        rows.insert(4, ["subagent tokens (unsplit)", _n(agg)])
 
     parts = [
         "# Usage overview",
         "",
-        f"**{_n(n_runs)} runs · {_n(n_turns)} prompts · {day0} → {day1}**",
+        f"**{_n(n_runs)} runs · {_n(n_prompts)} prompts · {_n(n_turns)} turns · "
+        f"{day0} → {day1}**",
         "",
-        _table(["metric", "total"], [
-            ["input tokens", _n(tot[1])],
-            ["output tokens", _n(tot[2])],
-            ["cache read", _n(tot[3])],
-            ["cache creation", _n(tot[4])],
-            ["tool calls", _n(tot[5])],
-            ["wall-clock", _ms(wall)],
-        ]),
+        _table(["metric", "total"], rows),
+        "",
+        "_Weighted tokens are input-equivalent units (output 5x, cache write "
+        "1.25-2x, cache read 0.1x) — the only figure comparable across "
+        "approaches. Active time caps idle gaps; elapsed span is calendar time "
+        "and includes them._",
     ]
+    if agg:
+        parts.append(
+            "_Unsplit subagent tokens come from backgrounded agents that only "
+            "reported a total, so they are excluded from the weighted figure._")
 
     by_model = conn.execute(
-        """SELECT COALESCE(model,'(unknown)'), COUNT(*),
-                  SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens)
+        f"""SELECT COALESCE(model,'(unknown)'), COUNT(*),
+                  SUM(input_tokens), SUM(output_tokens), SUM(cache_read_tokens),
+                  SUM({cost.WEIGHTED_SQL})
            FROM turns GROUP BY model ORDER BY SUM(output_tokens) DESC"""
     ).fetchall()
     parts += ["", "## By model",
-              _table(["model", "prompts", "input", "output", "cache read"],
-                     [[m, _n(c), _n(i), _n(o), _n(cr)] for m, c, i, o, cr in by_model])]
+              _table(["model", "turns", "input", "output", "cache read",
+                      "weighted", "est. USD"],
+                     [[m, _n(c), _n(i), _n(o), _n(cr), _n(int(w or 0)),
+                       _usd(cost.usd(w or 0, m))]
+                      for m, c, i, o, cr, w in by_model])]
 
     by_proj = conn.execute(
         """SELECT COALESCE(r.project,'(none)'), COUNT(DISTINCT r.run_id),
@@ -115,23 +149,40 @@ def render_overview(conn: sqlite3.Connection) -> str:
                      [[p, _n(rn), _n(pr), _n(i), _n(o)] for p, rn, pr, i, o in by_proj])]
 
     by_source = conn.execute(
-        """SELECT query_source, COUNT(*), SUM(input_tokens), SUM(output_tokens)
-           FROM turns GROUP BY query_source ORDER BY query_source"""
+        f"""SELECT query_source, COUNT(*), SUM(input_tokens), SUM(output_tokens),
+                   SUM({cost.WEIGHTED_SQL}) + SUM(total_tokens_agg)
+            FROM turns GROUP BY query_source ORDER BY query_source"""
     ).fetchall()
     if any(r[0] == "subagent" for r in by_source):
         parts += ["", "## By query source",
-                  _table(["source", "turns", "input", "output"],
-                         [[s, _n(c), _n(i), _n(o)] for s, c, i, o in by_source])]
+                  _table(["source", "turns", "input", "output", "weighted"],
+                         [[q, _n(c), _n(i), _n(o), _n(int(w or 0))]
+                          for q, c, i, o, w in by_source])]
+        by_agent = conn.execute(
+            f"""SELECT COALESCE(agent_type,'(unknown)'), COUNT(*),
+                       SUM(output_tokens), SUM({cost.WEIGHTED_SQL})
+                FROM turns WHERE query_source = 'subagent'
+                GROUP BY agent_type ORDER BY 4 DESC"""
+        ).fetchall()
+        if by_agent:
+            parts += ["", "## By subagent",
+                      _table(["agent", "runs", "output", "weighted"],
+                             [[a, _n(c), _n(o), _n(int(w or 0))]
+                              for a, c, o, w in by_agent])]
 
     by_day = conn.execute(
-        """SELECT substr(started_at,1,10) AS day, COUNT(*),
-                  SUM(input_tokens), SUM(output_tokens)
-           FROM turns WHERE started_at IS NOT NULL
-           GROUP BY day ORDER BY day"""
+        f"""SELECT substr(started_at,1,10) AS day,
+                   SUM(CASE WHEN is_prompt = 1 AND query_source = 'main'
+                            THEN 1 ELSE 0 END),
+                   SUM(input_tokens), SUM(output_tokens),
+                   SUM({cost.WEIGHTED_SQL})
+            FROM turns WHERE started_at IS NOT NULL
+            GROUP BY day ORDER BY day"""
     ).fetchall()
     parts += ["", "## By day",
-              _table(["day", "prompts", "input", "output"],
-                     [[d, _n(c), _n(i), _n(o)] for d, c, i, o in by_day])]
+              _table(["day", "prompts", "input", "output", "weighted"],
+                     [[d, _n(c), _n(i), _n(o), _n(int(w or 0))]
+                      for d, c, i, o, w in by_day])]
 
     return "\n".join(parts)
 
@@ -168,8 +219,9 @@ def render_compare(conn: sqlite3.Connection, by: str = "model",
         return msg
 
     parts = [f"# Approach comparison (by {by})", "",
-             "Ranked on median **total tokens per successful run** "
-             "(lower is better). Only self-reported successes count."]
+             "Ranked on median **weighted tokens per successful run** (lower is "
+             "better) — input-equivalent units, so cache reuse is not punished. "
+             "Only self-reported successes count."]
     if inferred:
         parts.append(f"_{inferred} inferred-success run(s) excluded from ranking._")
 
@@ -180,10 +232,10 @@ def render_compare(conn: sqlite3.Connection, by: str = "model",
                           f"run(s) (need ≥{min_samples} to compare)."]
             continue
         table = _table(
-            [by, "n", "med total tok", "med output tok", "med prompts", "med wall"],
-            [[a["approach"], a["n"], _n(a["median_total_tokens"]),
+            [by, "n", "med weighted", "med output tok", "med prompts", "med active"],
+            [[a["approach"], a["n"], _n(a["median_weighted_tokens"]),
               _n(a["median_output_tokens"]), _n(a["median_prompts"]),
-              (_ms(a["median_wall_ms"]) + (" ⚠n=1" if a["n"] < 2 else ""))]
+              (_ms(a["median_active_ms"]) + (" ⚠n=1" if a["n"] < 2 else ""))]
              for a in b["ranked"]])
         parts += ["", f"{title}  ({b['n_success']} successful runs)", table]
 
@@ -217,7 +269,7 @@ def render_recommend(conn: sqlite3.Connection, task_type: str | None = None,
         best = b["ranked"][0]
         if b["confident"]:
             lead = (f"→ **{best['approach']}** — median "
-                    f"{_n(best['median_total_tokens'])} total tokens / success "
+                    f"{_n(best['median_weighted_tokens'])} weighted tokens / success "
                     f"(n={best['n']}).")
         else:
             lead = (f"→ **{best['approach']}** _(low confidence: only "
@@ -226,7 +278,7 @@ def render_recommend(conn: sqlite3.Connection, task_type: str | None = None,
         if len(b["ranked"]) > 1:
             lines += ["", _table(
                 [by, "n", "med total tok", "med prompts"],
-                [[a["approach"], a["n"], _n(a["median_total_tokens"]),
+                [[a["approach"], a["n"], _n(a["median_weighted_tokens"]),
                   _n(a["median_prompts"])] for a in b["ranked"]])]
         return "\n".join(lines)
 
@@ -239,7 +291,7 @@ def render_recommend(conn: sqlite3.Connection, task_type: str | None = None,
         best = b["ranked"][0]
         conf = "" if b["confident"] else " ⚠low"
         rows.append([f"{b['task_type']} · {b['size']}", best["approach"] + conf,
-                     b["n_success"], _n(best["median_total_tokens"])])
+                     b["n_success"], _n(best["median_weighted_tokens"])])
     return partial + "\n".join([
         f"# Recommended approach per bucket (by {by})", "",
         "Cheapest-per-success approach in each {task_type × size} bucket. "
@@ -328,7 +380,7 @@ def render_degradation(conn: sqlite3.Connection, period: str = "month") -> str:
                          (round(jv["avg"], 2) if jv else "—")])
         parts += ["", f"## {model}",
                   _table(["period", "runs", "out/prompt", "interrupts",
-                          "edits w/o read", "loops", "ctx%", "judge"], body)]
+                          "edits w/o read", "loops", "ctx% (assumed)", "judge"], body)]
         spans = sorted({v for r in mrows
                         for v in (judge.get((model, r["period"])) or {})
                         .get("versions", [])})
@@ -374,7 +426,9 @@ def render_run(conn: sqlite3.Connection, run_id: str) -> str:
                  ["output tokens", _n(r["output_tokens"])],
                  ["cache read", _n(r["cache_read_tokens"])],
                  ["cache creation", _n(r["cache_creation_tokens"])],
-                 ["wall-clock", _ms(r["wall_clock_ms"])],
+                 ["**weighted tokens**", f'**{_n(int(cost.weighted(r["input_tokens"], r["output_tokens"], r["cache_read_tokens"], r["cache_creation_tokens"], r["cache_creation_1h_tokens"])))}**'],
+                 ["active time", _ms(r["active_ms"])],
+                 ["elapsed span", _ms(r["wall_clock_ms"])],
                  ["lines +/-", f'+{_n(r["lines_added"])} / -{_n(r["lines_removed"])}'],
                  ["files touched", _n(r["files_touched"])],
                  ["doc words", _n(r["doc_words"])],
@@ -386,18 +440,21 @@ def render_run(conn: sqlite3.Connection, run_id: str) -> str:
                  ["edits without read", _n(r["edits_without_read"])],
                  ["reasoning loops", _n(r["reasoning_loops"])],
                  ["premature stops", _n(r["premature_stops"])],
-                 ["peak context %", g("peak_context_pct")],
+                 ["peak context tokens", _n(r["peak_context_tokens"])],
+                 ["peak context % (assumed window)", g("peak_context_pct")],
                  ["compactions", _n(r["compact_count"])],
                  ["clears", _n(r["clear_count"])],
              ])]
 
     qs = conn.execute(
-        """SELECT query_source, SUM(input_tokens), SUM(output_tokens)
-           FROM turns WHERE run_id=? GROUP BY query_source""", (run_id,)).fetchall()
+        f"""SELECT query_source, COUNT(*), SUM(input_tokens), SUM(output_tokens),
+                   SUM({cost.WEIGHTED_SQL}) + SUM(total_tokens_agg)
+            FROM turns WHERE run_id=? GROUP BY query_source""", (run_id,)).fetchall()
     if any(row[0] == "subagent" for row in qs):
         parts += ["", "## By query source",
-                  _table(["source", "input", "output"],
-                         [[row[0], _n(row[1]), _n(row[2])] for row in qs])]
+                  _table(["source", "turns", "input", "output", "weighted"],
+                         [[row[0], _n(row[1]), _n(row[2]), _n(row[3]),
+                           _n(int(row[4] or 0))] for row in qs])]
 
     outcome = f'{g("outcome")} ({g("outcome_source")})'
     if r["satisfaction"] is not None:

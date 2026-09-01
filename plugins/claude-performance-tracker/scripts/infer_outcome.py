@@ -8,8 +8,8 @@ view filters to outcome_source='self_report'), and `unknown` is the honest
 fallback when signals are ambiguous.
 
 Signals (all deterministic):
-  * n_prompts      — number of main user prompts in the run.
-  * interrupts     — toolUseResult.interrupted count (from the envelope).
+  * n_prompts      — number of real main-thread human prompts in the run.
+  * interrupts     — `[Request interrupted]` markers (from the envelope).
   * re_prompts     — correction-cue prompts (from the envelope).
   * positive_cues  — user prompts containing approval language.
   * negative_cues  — user prompts containing failure language.
@@ -19,9 +19,14 @@ Decision order (documented, tunable):
   1. negative cue, or interrupts >= max(2, n_prompts)        -> failed
   2. positive cue and no interrupts                          -> success
   3. no prompts at all                                       -> unknown
-  4. produced output with no re-prompts and no interrupts    -> success
-  5. any re-prompts or interrupts                            -> partial
-  6. otherwise                                               -> unknown
+  4. any re-prompts or interrupts                            -> partial
+  5. otherwise                                               -> unknown
+
+"Produced tokens with no visible friction" used to infer `success`, which — with
+the friction detectors silently broken — labelled 72 of 106 closed runs
+successful on no evidence beyond "the model wrote something". Finishing quietly
+is not the same as succeeding, so that path is now honestly `unknown`. Only an
+explicit approval cue infers success; ground truth still comes from /track-done.
 """
 
 from __future__ import annotations
@@ -42,7 +47,7 @@ NEGATIVE = re.compile(
 def compute_signals(conn: sqlite3.Connection, run_id: str) -> dict:
     prompts = [r[0] or "" for r in conn.execute(
         "SELECT prompt_text FROM turns WHERE run_id = ? AND query_source = 'main' "
-        "ORDER BY seq", (run_id,))]
+        "AND is_prompt = 1 ORDER BY seq", (run_id,))]
     row = conn.execute(
         "SELECT interrupts, re_prompts, output_tokens, lines_added "
         "FROM runs WHERE run_id = ?", (run_id,)).fetchone()
@@ -65,8 +70,6 @@ def infer(s: dict) -> str:
         return "success"
     if n == 0:
         return "unknown"
-    if s["produced"] and s["re_prompts"] == 0 and s["interrupts"] == 0:
-        return "success"
     if s["re_prompts"] > 0 or s["interrupts"] > 0:
         return "partial"
     return "unknown"

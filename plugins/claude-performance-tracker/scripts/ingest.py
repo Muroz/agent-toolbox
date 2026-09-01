@@ -6,10 +6,23 @@ JSON payload from stdin (which includes `session_id`, `transcript_path`, `cwd`,
 
 Design: lifecycle hooks are cheap and only maintain boundaries/markers; the `Stop`
 event does the heavy lifting by parsing `transcript_path` for the turn envelope.
-Run finalization happens at boundary events (SessionEnd / clear / track-done).
+Run finalization happens at boundary events (SessionEnd / stale sweep / track-done).
 
-This is a SCAFFOLD. Each handler is stubbed and tracked as a tracer-bullet issue.
-A hook must never block the session: on any error we exit 0 and stay silent.
+There is deliberately no `SubagentStop` hook. It used to exist, and it was
+actively destructive: its payload's `transcript_path` is the *main* transcript,
+so firing mid-turn it captured the in-flight main turn with only the tokens
+produced so far, mislabelled it `subagent`, and pinned it — after which the real
+`Stop` skipped it as already-seen. Turns that spawned a subagent lost ~89% of
+their output tokens. Subagent spend is read from the `Agent` tool results in the
+main transcript instead (see transcript.py), which is both complete and correct.
+
+There is also no `UserPromptSubmit` hook: turn capture happens at `Stop`, when
+the usage is actually known, so that hook spawned a Python process per prompt to
+do nothing.
+
+A hook must never block the session: on any error we exit 0 and stay silent. Set
+$CPT_DEBUG=1 to print the traceback to stderr instead of swallowing it — without
+it, a broken plugin looks exactly like a working one.
 """
 
 from __future__ import annotations
@@ -18,6 +31,7 @@ import argparse
 import json
 import os
 import sys
+import traceback
 
 import db
 import infer_outcome
@@ -25,6 +39,11 @@ import store
 
 
 def _read_payload() -> dict:
+    # Hooks always pipe their JSON in. Run by hand from a terminal there is
+    # nothing to read, and blocking on an interactive stdin would look like a
+    # hang rather than a mistake.
+    if sys.stdin is None or sys.stdin.isatty():
+        return {}
     try:
         raw = sys.stdin.read()
         return json.loads(raw) if raw.strip() else {}
@@ -51,14 +70,11 @@ def on_session_start(payload: dict, data_dir: str | None) -> None:
     try:
         store.open_passive_run(
             conn, session_id, payload.get("transcript_path"), _project(payload))
+        # Close out runs abandoned by a crash or a killed terminal, which would
+        # otherwise sit open forever with zero aggregates and never be reported.
+        store.sweep_stale_runs(conn)
     finally:
         conn.close()
-
-
-def on_user_prompt_submit(payload: dict, data_dir: str | None) -> None:
-    # Turn capture happens at Stop (when the assistant's usage is known). Nothing
-    # to do here yet; /clear boundary handling is a later slice.
-    pass
 
 
 def _capture(payload: dict, data_dir: str | None) -> tuple[str, str] | None:
@@ -71,6 +87,10 @@ def _capture(payload: dict, data_dir: str | None) -> tuple[str, str] | None:
 
     Returns (run_id, session_id) — the run the turns were attributed to.
     """
+    # SessionStart is not guaranteed to have run first: a plugin installed
+    # mid-session sees its very first event at Stop. Without this the schema is
+    # missing and every capture fails — silently, since hooks swallow errors.
+    db.init_db(data_dir)
     session_id = payload.get("session_id")
     transcript = _transcript(payload)
     if not session_id or not transcript:
@@ -93,31 +113,6 @@ def _capture(payload: dict, data_dir: str | None) -> tuple[str, str] | None:
 
 def on_stop(payload: dict, data_dir: str | None) -> None:
     _capture(payload, data_dir)
-
-
-def on_subagent_stop(payload: dict, data_dir: str | None) -> None:
-    """Attribute a finished subagent's token usage to the parent run.
-
-    The payload's transcript_path points at the subagent's own (sidechain)
-    transcript. Its turns attach to whichever run the parent session is feeding
-    (open tracked run, else the session's passive run), tagged query_source=subagent.
-    """
-    session_id = payload.get("session_id")
-    transcript = _transcript(payload)
-    if not session_id or not transcript:
-        return
-    conn = db.connect(data_dir)
-    try:
-        run_id = store.get_active_tracked_run(conn, session_id) \
-            or store.get_run_for_session(conn, session_id)
-        if run_id is None:
-            run_id = store.open_passive_run(
-                conn, session_id, None, _project(payload))
-        store.capture_session_turns(
-            conn, run_id, session_id, transcript,
-            query_source="subagent", include_sidechain=True)
-    finally:
-        conn.close()
 
 
 def on_session_end(payload: dict, data_dir: str | None) -> None:
@@ -143,9 +138,7 @@ def on_session_end(payload: dict, data_dir: str | None) -> None:
 
 HANDLERS = {
     "SessionStart": on_session_start,
-    "UserPromptSubmit": on_user_prompt_submit,
     "Stop": on_stop,
-    "SubagentStop": on_subagent_stop,
     "SessionEnd": on_session_end,
 }
 
@@ -160,10 +153,12 @@ def main() -> int:
     try:
         handler(_read_payload(), args.data_dir)
     except Exception:
-        # Never break the user's session because tracking failed.
+        # Never break the user's session because tracking failed — but do not
+        # make a broken plugin indistinguishable from a working one either.
+        if os.environ.get("CPT_DEBUG"):
+            traceback.print_exc(file=sys.stderr)
         return 0
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

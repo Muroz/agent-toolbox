@@ -40,8 +40,10 @@ CREATE TABLE IF NOT EXISTS runs (
     output_tokens         INTEGER DEFAULT 0,
     cache_read_tokens     INTEGER DEFAULT 0,
     cache_creation_tokens INTEGER DEFAULT 0,
-    wall_clock_ms         INTEGER,
-    api_duration_ms       INTEGER,
+    cache_creation_1h_tokens INTEGER DEFAULT 0,
+    total_tokens_agg      INTEGER DEFAULT 0,
+    wall_clock_ms         INTEGER,   -- elapsed calendar span, first to last turn
+    active_ms             INTEGER,   -- working time: sum of the turns' active_ms
     num_prompts           INTEGER DEFAULT 0,
     num_tool_calls        INTEGER DEFAULT 0,
 
@@ -58,7 +60,10 @@ CREATE TABLE IF NOT EXISTS runs (
     reasoning_loops     INTEGER DEFAULT 0,
     premature_stops     INTEGER DEFAULT 0,
 
-    -- context-window pressure
+    -- context-window pressure. The raw token peak is the honest figure; the
+    -- percentage depends on a window size the transcript never states, so it is
+    -- derived at read time against a documented assumption (see report.py).
+    peak_context_tokens INTEGER,
     peak_context_pct    REAL,
     compact_count       INTEGER DEFAULT 0,
     clear_count         INTEGER DEFAULT 0,
@@ -91,8 +96,22 @@ CREATE TABLE IF NOT EXISTS turns (
     output_tokens         INTEGER DEFAULT 0,
     cache_read_tokens     INTEGER DEFAULT 0,
     cache_creation_tokens INTEGER DEFAULT 0,
-    api_duration_ms       INTEGER,
+    -- the 1h-TTL slice of cache_creation_tokens; the remainder is 5m TTL. Kept
+    -- apart because they bill at 2x and 1.25x input respectively (see cost.py).
+    cache_creation_1h_tokens INTEGER DEFAULT 0,
+    -- a backgrounded subagent that only ever reported an aggregate total, with
+    -- no per-class split. Deliberately excluded from weighted cost.
+    total_tokens_agg      INTEGER DEFAULT 0,
+    -- working time: the turn's span with each idle gap capped (transcript.py).
+    active_ms             INTEGER,
     num_tool_calls        INTEGER DEFAULT 0,
+
+    -- False for rows that consume tokens but are not a human prompt: subagent
+    -- rows, and assistant work with no preceding prompt. `num_prompts` counts
+    -- is_prompt rows only, so Claude Code's injected `<task-notification>`
+    -- records can never inflate it again.
+    is_prompt       INTEGER NOT NULL DEFAULT 1,
+    agent_type      TEXT,           -- subagent_type, for subagent rows
 
     prompt_text     TEXT,           -- retained for prompt-quality scoring
     source          TEXT NOT NULL DEFAULT 'transcript'
@@ -155,3 +174,13 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_run ON sessions(run_id);
+
+
+-- Schema bookkeeping, so an existing database can be migrated forward instead of
+-- silently keeping an old column set. `CREATE TABLE IF NOT EXISTS` alone never
+-- adds a column to a table that already exists, which is how the 0.2.0 -> 0.3.0
+-- change stranded the old `open_run` table. See db.py `_migrate`.
+CREATE TABLE IF NOT EXISTS schema_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);

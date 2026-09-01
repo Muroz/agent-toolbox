@@ -10,32 +10,12 @@
         ]
       }
     ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/bin/cpt\" ingest --event UserPromptSubmit --data-dir \"${CLAUDE_PLUGIN_DATA}\""
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
             "command": "bash \"${CLAUDE_PLUGIN_ROOT}/bin/cpt\" ingest --event Stop --data-dir \"${CLAUDE_PLUGIN_DATA}\""
-          }
-        ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/bin/cpt\" ingest --event SubagentStop --data-dir \"${CLAUDE_PLUGIN_DATA}\""
           }
         ]
       }

@@ -9,9 +9,11 @@ Render reports from the local store. All numbers are computed at read time from 
 
 ## Views
 
-- `overview` — totals + per-project + per-model + time-series (tokens, prompts, wall-clock).
-- `compare` — for a `{task_type × size}` bucket, each approach's median tokens / time /
-  prompts **per successful outcome**. Refuses to rank a bucket with too few samples
+- `overview` — totals + per-project + per-model + per-subagent + time-series. Reports
+  **weighted** tokens (input-equivalent: output 5x, cache write 1.25-2x, cache read 0.1x)
+  alongside the raw classes, plus active time (idle gaps capped) and elapsed span.
+- `compare` — for a `{task_type × size}` bucket, each approach's median **weighted** tokens /
+  active time / prompts **per successful outcome**. Refuses to rank a bucket with too few samples
   ("insufficient data, n=N") rather than crown a false winner. Choose the approach
   dimension with `--by model|mode|subagent|skill|effort` (default `model`), and the
   ranking threshold with `--min N`. Only self-reported successful tracked runs are ranked;
@@ -49,3 +51,11 @@ python3 "$REPORT" [view] [args]
 ```
 
 > Scaffold: report queries are tracer-bullet issues, one per view.
+
+
+## Repairing the store
+
+If numbers look wrong — or after upgrading from a version before 0.4.0 — run `cpt backfill`
+to re-derive every session's turns from its transcript, then re-read the report. It repairs
+truncated envelopes, drops rows the parser no longer produces, and recomputes each affected
+run's aggregates, signals and inferred outcome. Safe to re-run.

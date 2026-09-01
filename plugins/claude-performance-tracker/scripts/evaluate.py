@@ -51,8 +51,12 @@ def context(conn, run_id: str) -> dict:
         if row and row[0]:
             transcripts.append(row[0])
     turns = [{"turn_id": r[0], "prompt": r[1]} for r in conn.execute(
+        # is_prompt filters out Claude Code's injected records — otherwise the
+        # judge scores a multi-thousand-word `<task-notification>` payload as if
+        # it were the user's prompt writing.
         "SELECT turn_id, prompt_text FROM turns "
-        "WHERE run_id = ? AND query_source = 'main' ORDER BY seq", (run_id,))]
+        "WHERE run_id = ? AND query_source = 'main' AND is_prompt = 1 "
+        "ORDER BY seq", (run_id,))]
     return {"run_id": run_id, "rubric_path": str(rubric.RUBRIC_PATH),
             "rubric_version": rubric.version(), "transcripts": transcripts,
             "turns": turns}

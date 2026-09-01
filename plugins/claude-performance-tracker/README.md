@@ -130,13 +130,20 @@ Today the numbers come from parsing session transcripts. Every stored row record
 
 | Hook | Role |
 |------|------|
-| `SessionStart` | Set up the DB if needed (safe to run repeatedly) and open the session's passive run. |
-| `UserPromptSubmit` | Reserved for boundary markers (kept light; the actual capture runs at Stop). |
-| `Stop` | Does the main work: parse the transcript and insert this session's new turns. |
-| `SubagentStop` | Parse the finished subagent's transcript and attach its turns to the parent run. |
+| `SessionStart` | Set up and migrate the DB (safe to run repeatedly), open the session's passive run, and sweep runs abandoned by a crash. |
+| `Stop` | Does the main work: parse the transcript, insert new turns and refresh existing envelopes. |
 | `SessionEnd` | Close the passive run: aggregate turns, compute the signal summary, infer the outcome. |
 
-Hooks never block the session: on any error they exit 0 and do nothing. They run via the
+There is deliberately **no `SubagentStop` hook**. Its payload's `transcript_path` is the
+*main* transcript, so firing mid-turn it captured the in-flight main turn with only the
+tokens produced so far, mislabelled it `subagent`, and pinned it — turns that spawned a
+subagent lost ~89% of their output. Subagent spend comes from the `Agent` tool results
+instead. There is no `UserPromptSubmit` hook either: capture happens at `Stop`, when usage is
+known, so it only ever spawned a process to do nothing.
+
+Hooks never block the session: on any error they exit 0 and do nothing — set `CPT_DEBUG=1`
+to print the traceback instead, so a plugin that has silently stopped capturing is
+distinguishable from one that is working. They run via the
 bundled `bin/cpt` launcher — a bash wrapper that picks a pyenv-independent interpreter (see
 [Python resolution](#python-resolution)) — and read and write the same SQLite file the
 skills use, found via `${CLAUDE_PLUGIN_DATA}`.
@@ -154,20 +161,31 @@ The setting is harmless when pyenv is not installed.
 
 ### Turn parsing (`transcript.py`)
 
-- A **turn** starts at a real user prompt: a `type=user` line that is not `isMeta` and not a
-  tool result. Meta lines and tool results never start a turn.
+- A **turn** starts at a real user prompt: a `type=user` line that is not `isMeta`, not a
+  tool result, and not one of Claude Code's injected records (`<task-notification>`,
+  local-command caveats/stdout, `[Request interrupted…]`). Those inject no prompt — counting
+  them inflated `num_prompts` by ~19% — so they fold into the turn already in progress.
 - Assistant lines appear more than once in the transcript (the same `message.id` repeats), so
   token usage is counted **once per distinct `message.id`**.
 - Each turn is keyed on the user prompt's `uuid`, since the transcript has no per-turn id.
-- `include_sidechain=True` is set only when parsing a **subagent's own** transcript, which is
-  entirely sidechain. A main transcript skips sidechain lines, so subagent lines embedded in
-  it are never counted twice.
+- **Subagent usage is not in the transcript as sidechain records** — `isSidechain` is false
+  on every record of every real transcript. It arrives in the `Agent` tool's `toolUseResult`
+  (`agentId`, `agentType`, `resolvedModel`, `usage`, `totalToolUseCount`), and each subagent
+  becomes its own row keyed `agent:<agentId>`. A backgrounded agent's launch result carries
+  no usage; it reports back later in a `<task-notification>` with only an aggregate total,
+  which is stored separately in `total_tokens_agg` and kept out of the weighted-cost maths
+  rather than guessed at.
+- `effort` is read from the top level of each assistant record, so `--by effort` works.
 
-### Capture only ever inserts
+### Attribution is pinned; the envelope is not
 
 A turn is assigned to a run the first time it's seen, based on whichever run was active at
-that `Stop`. Turns are never rewritten, so switching the tracked/passive pointer mid-session
-never re-labels earlier turns. It's safe to run repeatedly because `turn_id` is the primary
+that `Stop`, and its `run_id` / `session_id` / `query_source` are never rewritten — so
+switching the tracked/passive pointer mid-session never re-labels earlier turns. Its **token
+envelope**, by contrast, is refreshed on every pass, taking the larger of the stored and
+freshly parsed value per column. Without that, a turn caught mid-flight kept a fraction of
+its real tokens forever; because counts only ever grow, a re-parse of a compacted transcript
+can never shrink one either. It's safe to run repeatedly because `turn_id` is the primary
 key.
 
 ### Tracked runs — per session, with pause/resume
@@ -208,8 +226,12 @@ scoped per run, so a passive and a tracked run that share a session get separate
 |-------|---------------------|
 | Approach | `models`, `permission_mode` (distinct, mixed-mode aware), `subagents_used`, `skills_used`, `mcp_tools_used` (servers) |
 | Output | `lines_added`/`removed` (from `toolUseResult.structuredPatch`), `files_touched`, `doc_words` (`.md`/doc edits) |
-| Friction | `interrupts` (`toolUseResult.interrupted`), `re_prompts` (correction-cue prompts), `edits_without_read` (Edit on an un-read file — a Write *creates* context), `reasoning_loops` (a file read 3×+), `premature_stops` (`stop_reason=max_tokens`) |
-| Context | `peak_context_pct` (max input+cache tokens / inferred window tier — 1M if any response >200k else 200k), `compact_count`, `clear_count` |
+| Friction | `interrupts` (the `[Request interrupted…]` marker — **not** `toolUseResult.interrupted`, which appears in no real transcript), `re_prompts` (correction-cue prompts), `edits_without_read` (Edit on an un-read file — a Write *creates* context), `reasoning_loops` (a file read 3×+), `premature_stops` (`stop_reason=max_tokens`) |
+| Context | `peak_context_tokens` (raw max of input+cache tokens — the assumption-free figure) and `peak_context_pct` against a window the transcript never states: set `CPT_CONTEXT_WINDOW` to declare it, else 200k, escalating to 1M only if the observed peak exceeds it |
+
+A prompt that never got a reply (`/clear` is the usual case) produces no row in `turns`, so
+its bundle is carried forward to the run of the nearest preceding turn rather than dropped —
+without that, `clear_count` was structurally pinned at zero.
 
 Lines of code come only from `structuredPatch` (Read results carry a filePath but no patch,
 so they never count as output). `effort` is left null — it isn't in the transcript and will
@@ -277,7 +299,6 @@ flowchart TD
       direction TB
       SS[SessionStart<br/>init DB + open passive run]
       ST[Stop<br/>parse transcript → insert new turns]
-      SAS[SubagentStop<br/>attach subagent turns]
       SE[SessionEnd<br/>close run: aggregate,<br/>compute signal summary, infer outcome]
     end
 
@@ -450,8 +471,8 @@ skills include a cache-glob fallback for when it isn't found.
 ```
 claude-performance-tracker/
 ├── .claude-plugin/plugin.json
-├── hooks/hooks.json                 # SessionStart · UserPromptSubmit · Stop · SubagentStop · SessionEnd
-├── bin/cpt                          # launcher/multiplexer: ingest | track | report | eval | insights (also on PATH)
+├── hooks/hooks.json                 # SessionStart · Stop · SessionEnd
+├── bin/cpt                          # launcher/multiplexer: ingest | track | report | eval | insights | backfill | sweep (also on PATH)
 ├── agents/usage-evaluator.md         # Haiku judge (agent-behaviour + prompt quality)
 ├── agents/lessons-synthesizer.md     # Haiku playbook synthesizer (for /usage-lessons)
 ├── skills/{track,track-done,track-pause,track-resume,track-list,usage-report,usage-lessons,evaluate-run}/SKILL.md
@@ -459,7 +480,8 @@ claude-performance-tracker/
 │   ├── db.py            # data-dir resolution + idempotent schema init
 │   ├── schema.sql       # runs · turns · scores · judge_verdicts · sessions · active_tracked
 │   ├── ingest.py        # hook dispatch (never blocks the session)
-│   ├── transcript.py    # turn parsing (dedup, boundaries, sidechain)
+│   ├── cost.py          # weighted (input-equivalent) tokens + USD estimate
+│   ├── transcript.py    # turn parsing (dedup, boundaries, subagent rows)
 │   ├── store.py         # run/turn persistence, tracked-run lifecycle, finalize
 │   ├── signals.py       # deterministic signal summary derivation
 │   ├── infer_outcome.py # passive-run outcome heuristic
@@ -467,6 +489,7 @@ claude-performance-tracker/
 │   ├── insights.py      # read-time aggregations (bucket winners, friction, lessons pack)
 │   ├── rubric.py        # rubric version/keys (no YAML dep)
 │   ├── rubric.yaml      # the editable rubric (versioned, with calibration anchors)
+│   ├── maintenance.py   # backfill (repair from transcripts) · sweep (abandoned runs)
 │   └── report.py        # overview · compare · recommend · antipatterns · degradation · run
 └── tests/               # one test module per slice, stdlib unittest
 ```
@@ -521,3 +544,49 @@ Foundations are laid for each; none requires a rewrite:
 - **Scheduled digest** (auto-run `/usage-lessons`), **live statusline**, **real-time prompt
   coaching**, persisted **anti-pattern promotion state**, and richer **exporters**
   (JSON/CSV/HTML/dashboard) over the same raw tables.
+
+
+## Cost: weighted tokens
+
+Summing the four token classes is not a cost. Cache reads bill at **0.1x** input, cache
+writes at **1.25x** (5m TTL) or **2x** (1h), and output at **5x** — and on a real session the
+raw sum is ~95% cache reads. Ranking on it makes a run that reuses a long cached prefix look
+far more expensive than one that rebuilds context from scratch, which is exactly backwards.
+
+Every ranking therefore uses **weighted tokens**: input-equivalent units (`scripts/cost.py`).
+The 5x output multiplier holds for every current model, so weighted tokens are comparable
+across models; converting to dollars needs the per-model input price, and models that aren't
+in the table report `—` rather than a guess.
+
+Time is reported two ways for the same reason. `active_ms` sums each turn's span with
+individual idle gaps capped at 5 minutes, and is what the rankings use; `wall_clock_ms` is
+the raw calendar span, which on real data produced 250-hour "runs" and is not a cost.
+
+## ⚠ Uninstall deletes your captured data
+
+`claude plugin uninstall` removes `${CLAUDE_PLUGIN_DATA}` — the whole directory, including
+`usage.db` and anything else kept beside it. Months of capture go with it, and the
+uninstall/reinstall cycle that the README suggests for refreshing a same-version dev build
+is exactly the sequence that triggers it.
+
+Back the database up **outside** the data directory before uninstalling:
+
+```bash
+cp ~/.claude/plugins/data/claude-performance-tracker-*/usage.db ~/usage.db.bak
+```
+
+Prefer `claude plugin marketplace update` + `claude plugin update` (with a version bump)
+over uninstall/reinstall; an update preserves the data directory.
+
+## Repairing an existing store
+
+```bash
+cpt backfill    # re-derive every session's turns from its transcript
+cpt sweep       # finalize runs abandoned by a crash (also runs at SessionStart)
+```
+
+`backfill` is how a database written by an older version is corrected in place: truncated
+envelopes are refilled, rows the parser no longer produces are dropped, mislabelled subagent
+rows are relabelled, and every affected run's aggregates, signals and inferred outcome are
+recomputed. It only rewrites sessions whose transcript still exists; for the rest it applies
+what can be established from the stored row alone. Both commands are safe to re-run.

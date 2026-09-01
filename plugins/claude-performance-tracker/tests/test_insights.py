@@ -62,7 +62,10 @@ class TestInsights(unittest.TestCase):
         b = insights.bucket_winners(self.conn, "model", 5)
         self.assertEqual(len(b), 1)
         self.assertFalse(b[0]["confident"])  # 3 < 5
-        self.assertEqual(b[0]["ranked"][0]["median_total_tokens"], 200)
+        # Ranking is on weighted (input-equivalent) tokens, and these runs are
+        # pure output, which bills at 5x input — so the 200-token median
+        # run is 1000 weighted units.
+        self.assertEqual(b[0]["ranked"][0]["median_weighted_tokens"], 1000)
 
     def test_recurring_friction_ranked_and_mapped(self):
         _run(self.conn, friction={"edits_without_read": 2}, outcome="failed")

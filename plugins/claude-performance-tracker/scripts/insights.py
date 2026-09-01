@@ -17,6 +17,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from statistics import median
 
+import cost
 import db
 
 # Below this many successful runs a bucket is not "confident" enough to rank —
@@ -60,9 +61,8 @@ def _success_rows(conn: sqlite3.Connection, col: str) -> list:
     return conn.execute(
         f"""SELECT task_type, size_class, COALESCE({col}, '(none)') AS approach,
                    output_tokens,
-                   input_tokens + output_tokens + cache_read_tokens
-                       + cache_creation_tokens AS total_tokens,
-                   num_prompts, wall_clock_ms
+                   {cost.WEIGHTED_SQL} AS weighted_tokens,
+                   num_prompts, active_ms
             FROM runs
             WHERE capture_mode = 'tracked' AND outcome = 'success'
               AND outcome_source = 'self_report'
@@ -72,8 +72,11 @@ def _success_rows(conn: sqlite3.Connection, col: str) -> list:
 
 def bucket_winners(conn: sqlite3.Connection, by: str = "model",
                    min_samples: int = MIN_SAMPLES) -> list:
-    """Per {task_type x size} bucket, approaches ranked by median total tokens
-    (lower is better). Each bucket carries `n_success` and a `confident` flag."""
+    """Per {task_type x size} bucket, approaches ranked by median *weighted*
+    tokens (lower is better; see cost.py). Ranking on raw summed tokens would be
+    dominated by cache reads, which bill at a tenth of input — an approach that
+    reuses a long cached prefix would look the most expensive when it is in fact
+    the cheapest. Each bucket carries `n_success` and a `confident` flag."""
     col = APPROACH_DIMENSIONS.get(by)
     if col is None:
         raise ValueError(f"unknown approach dimension: {by}")
@@ -87,16 +90,16 @@ def bucket_winners(conn: sqlite3.Connection, by: str = "model",
         n_success = sum(len(v) for v in approaches.values())
         ranked = []
         for approach, runs in approaches.items():
-            wall = [r[6] for r in runs if r[6] is not None] or [0]
+            active = [r[6] for r in runs if r[6] is not None] or [0]
             ranked.append({
                 "approach": approach,
                 "n": len(runs),
-                "median_total_tokens": int(median([r[4] for r in runs])),
+                "median_weighted_tokens": int(median([r[4] for r in runs])),
                 "median_output_tokens": int(median([r[3] for r in runs])),
                 "median_prompts": int(median([r[5] for r in runs])),
-                "median_wall_ms": int(median(wall)),
+                "median_active_ms": int(median(active)),
             })
-        ranked.sort(key=lambda x: x["median_total_tokens"])
+        ranked.sort(key=lambda x: x["median_weighted_tokens"])
         out.append({
             "task_type": ttype, "size": size, "by": by,
             "n_success": n_success, "confident": n_success >= min_samples,
