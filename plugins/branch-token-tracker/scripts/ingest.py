@@ -35,6 +35,14 @@ import transcript  # noqa: E402
 
 EVENTS = ("SessionStart", "Stop", "SessionEnd")
 
+# Events once registered in hooks.json and since retired. Claude Code snapshots
+# hooks.json at session start while the scripts are read live off disk, so a
+# session older than the edit keeps firing a retired hook at the current build.
+# Retired events must stay listed here and be no-ops forever.
+#
+# RULE: never delete an event name — move it from EVENTS to RETIRED.
+RETIRED: tuple[str, ...] = ()
+
 
 def _payload() -> dict:
     # Hooks always pipe their JSON in. Run by hand from a terminal there is
@@ -221,13 +229,40 @@ def run(event: str, data_dir: str | None) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Capture turns per branch ticket.")
-    parser.add_argument("--event", required=True, choices=EVENTS)
-    parser.add_argument("--data-dir", default=None)
-    args = parser.parse_args()
+    """Parse, dispatch, and — whatever happens — exit 0.
+
+    A hook's exit code is a control channel, not a diagnostic: on
+    `UserPromptSubmit` an exit of 2 *blocks the user's prompt* and shows them
+    our stderr. Claude Code snapshots hooks.json at session start, so a session
+    older than an edit here keeps firing events this build no longer registers;
+    rejecting those with argparse's exit-2 is what bricks the session. So the
+    parser lives inside the try (argparse raises SystemExit, not Exception),
+    unknown events are ignored rather than rejected, and the catch is
+    BaseException.
+
+    RULE: never delete a name from EVENTS — retiring it to a no-op is free,
+    and an unknown event is a stale-config no-op, never an error.
+
+    Set $BTT_DEBUG=1 to print what went wrong to stderr. Silence is the default
+    because stderr on a blocking hook event is user-facing.
+    """
     try:
+        parser = argparse.ArgumentParser(
+            description="Capture turns per branch ticket.", allow_abbrev=False)
+        parser.add_argument("--event", default=None)
+        parser.add_argument("--data-dir", default=None)
+        args, extra = parser.parse_known_args()
+
+        if args.event not in EVENTS:
+            if os.environ.get("BTT_DEBUG"):
+                print(f"btt ingest: ignoring event {args.event!r} "
+                      f"(known: {', '.join(EVENTS)})", file=sys.stderr)
+            return 0
+        if extra and os.environ.get("BTT_DEBUG"):
+            print(f"btt ingest: ignoring extra args {extra!r}", file=sys.stderr)
+
         run(args.event, args.data_dir)
-    except Exception:  # noqa: BLE001 — a hook must never break the session
+    except BaseException:  # noqa: BLE001 — see the docstring; exit 0 is the contract
         if os.environ.get("BTT_DEBUG"):
             traceback.print_exc(file=sys.stderr)
         return 0

@@ -13,6 +13,16 @@
 # so we force pyenv's `system` interpreter (harmless when pyenv is absent).
 # Override with BTT_PYTHON=/path/to/python3 if needed.
 set -euo pipefail
+
+# A hook's exit code is a control channel, not a diagnostic: on UserPromptSubmit
+# an exit of 2 *blocks the user's prompt* and shows them our stderr. `ingest` is
+# the only subcommand the hooks call, so once we know that is what we were asked
+# for, force every exit path — missing interpreter, unreadable script, a
+# hooks.json older than this build passing an event we retired — to 0. The trap
+# has to be installed before anything that can fail, and rules out `exec` (an
+# exec'd process carries no trap of ours).
+if [ "${1:-}" = "ingest" ]; then trap 'exit 0' EXIT; fi
+
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 scripts="$here/../scripts"
 export PYENV_VERSION="${PYENV_VERSION:-system}"
@@ -20,7 +30,7 @@ py="${BTT_PYTHON:-python3}"
 sub="${1:-}"
 shift || true
 case "$sub" in
-  ingest) exec "$py" "$scripts/ingest.py" "$@" ;;
+  ingest) "$py" "$scripts/ingest.py" "$@" || true; exit 0 ;;
   report) exec "$py" "$scripts/report.py" "$@" ;;
   *) echo "usage: btt {ingest|report} ..." >&2; exit 2 ;;
 esac

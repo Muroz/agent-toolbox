@@ -142,23 +142,58 @@ HANDLERS = {
     "SessionEnd": on_session_end,
 }
 
+# Events this plugin used to register and no longer does. Claude Code snapshots
+# hooks.json when a session starts, so a session older than the edit keeps
+# firing the retired hook against the current script. Retired events are
+# no-ops here forever — deleting the name instead of retiring it is what
+# bricked a live session once, and the tombstone costs nothing.
+#
+# RULE: never delete an event from this file. Move it here.
+RETIRED = ("UserPromptSubmit", "SubagentStop")
+
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--event", required=True, choices=sorted(HANDLERS))
-    parser.add_argument("--data-dir", default=None)
-    args = parser.parse_args()
+    """Parse, dispatch, and — whatever happens — exit 0.
 
-    handler = HANDLERS[args.event]
+    A hook's exit code is a control channel, not a diagnostic: on
+    `UserPromptSubmit` an exit of 2 *blocks the user's prompt* and shows them
+    our stderr. So this entrypoint has exactly one guarantee to keep, and it
+    outranks doing the actual work: it must never exit nonzero. That means the
+    argument parser is inside the try (argparse exits 2 on an unrecognised
+    `--event`, via SystemExit, which is not an Exception), unknown events are
+    ignored rather than rejected, and the catch is BaseException.
+
+    Set $CPT_DEBUG=1 to print what went wrong to stderr. Silence is the default
+    because stderr on a blocking hook event is user-facing.
+    """
     try:
+        parser = argparse.ArgumentParser(allow_abbrev=False)
+        # No `choices=` and no `required=`: an event name we do not know is a
+        # stale-config no-op, never an error.
+        parser.add_argument("--event", default=None)
+        parser.add_argument("--data-dir", default=None)
+        # parse_known_args so an unrecognised *flag* from an old hooks.json is
+        # ignored too, on the same reasoning as an unrecognised event.
+        args, extra = parser.parse_known_args()
+
+        handler = HANDLERS.get(args.event)
+        if handler is None:
+            if os.environ.get("CPT_DEBUG"):
+                known = ", ".join(sorted(HANDLERS))
+                print(f"cpt ingest: ignoring event {args.event!r} "
+                      f"(known: {known}; retired: {', '.join(RETIRED)})",
+                      file=sys.stderr)
+            return 0
+        if extra and os.environ.get("CPT_DEBUG"):
+            print(f"cpt ingest: ignoring extra args {extra!r}", file=sys.stderr)
+
         handler(_read_payload(), args.data_dir)
-    except Exception:
-        # Never break the user's session because tracking failed — but do not
-        # make a broken plugin indistinguishable from a working one either.
+    except BaseException:  # noqa: BLE001 — see the docstring; exit 0 is the contract
         if os.environ.get("CPT_DEBUG"):
             traceback.print_exc(file=sys.stderr)
         return 0
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main())
