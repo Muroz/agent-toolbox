@@ -62,6 +62,20 @@ from the `Agent` tool's `toolUseResult` and stored as their own rows (`query_sou
 exist in real transcripts — so in practice subagent spend went unbilled to the ticket
 entirely.
 
+An **async** agent's tool result carries no usage at all — just an `agentId` and a status. Its
+tokens arrive later in a `<task-notification>`, which is the only record of them, and that
+notification turns up on any of three record shapes: `type=user`, `type=attachment`, or
+`type=queue-operation`. All three are scanned. Scanning only `type=user` — which 0.3.0 and
+earlier did — dropped every agent whose notification came through as an attachment; in one
+real session that was two of four agents and 60% of the subagent tokens, and it read as a
+complete total rather than a gap because the other two were present. `btt backfill` recovers
+them.
+
+A notification reports a bare `<subagent_tokens>` total with no per-class split, so it lands
+in `total_tokens_agg` and is counted in the raw total but deliberately left out of the
+weighted figure rather than being split by guesswork. Agent-heavy tickets therefore show a
+weighted cost that excludes their backgrounded agents.
+
 ### Weighted vs raw tokens
 
 The headline figure is **weighted** tokens: input-equivalent units, since cache reads bill at
@@ -174,6 +188,25 @@ btt report --format csv > tokens.csv   # or --format json
 An unparsable `--since` is reported as ignored rather than silently widening the query to all
 time.
 
+## Repairing an existing store
+
+```bash
+btt backfill        # re-read every captured session's transcript
+```
+
+Turns are re-derived from the transcripts still on disk, so spend an older parser could not
+see is recovered rather than lost. Counts only ever grow, it is idempotent, and a session
+whose transcript has been deleted keeps whatever was captured at the time.
+
+It does **not** re-resolve the branch. A session can span several branches — that is the
+whole point of resolving at every `Stop` — so the stored ticket is the contemporaneous record
+of where the work actually ran. A recovered turn instead inherits the ticket of the most
+recent stored turn that started no later than it did, which puts it on the branch that was
+checked out while it ran.
+
+Run it after upgrading the plugin. The parser fix in 0.4.0 in particular means every store
+written before it is understating subagent spend.
+
 `<data-dir>/current.json` holds the latest session's totals for a statusline or a script:
 
 ```json
@@ -214,13 +247,14 @@ you. Install either, or both.
 branch-token-tracker/
 ├── .claude-plugin/plugin.json
 ├── hooks/hooks.json                 # SessionStart, Stop, SessionEnd
-├── bin/btt                          # launcher/multiplexer: ingest | report (also on PATH)
+├── bin/btt                          # launcher/multiplexer: ingest | report | backfill (on PATH)
 ├── scripts/
 │   ├── db.py                        # data dir resolution + schema init
 │   ├── schema.sql                   # one table: turns
 │   ├── config.py                    # branch -> ticket id
 │   ├── transcript.py                # turn + token-usage extraction
 │   ├── ingest.py                    # hook entrypoint
+│   ├── maintenance.py               # backfill: re-derive turns from transcripts
 │   └── report.py                    # markdown | csv | json
 ├── skills/token-report/SKILL.md     # /token-report
 └── tests/

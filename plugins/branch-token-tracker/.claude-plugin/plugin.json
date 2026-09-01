@@ -1,6 +1,6 @@
 {
   "name": "branch-token-tracker",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Attribute token spend to the task-tracker id in your git branch name.",
   "author": {
     "name": "Diego Zuluaga"
