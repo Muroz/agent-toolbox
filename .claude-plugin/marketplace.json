@@ -10,13 +10,13 @@
       "name": "claude-performance-tracker",
       "source": "./plugins/claude-performance-tracker",
       "description": "Qualify good agent usage and compare approaches on a cost-per-successful-outcome basis (tokens, time, prompts).",
-      "version": "0.5.0"
+      "version": "0.6.0"
     },
     {
       "name": "branch-token-tracker",
       "source": "./plugins/branch-token-tracker",
       "description": "Attribute token spend to the task-tracker id in your git branch name.",
-      "version": "0.3.0"
+      "version": "0.4.0"
     }
   ]
 }
