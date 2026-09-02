@@ -99,6 +99,7 @@ class Turn:
     prompt_text: str = ""
     _msgs: dict = field(default_factory=dict, repr=False)
     _stamps: list = field(default_factory=list, repr=False)
+    _tools: set = field(default_factory=set, repr=False)
 
 
 def parse_iso(ts: str | None) -> datetime | None:
@@ -154,6 +155,35 @@ def _is_user_record(rec: dict) -> bool:
         first = content[0]
         return isinstance(first, dict) and first.get("type") == "text"
     return False
+
+
+def _collect_tools(turn: "Turn", rec: dict) -> None:
+    """Remember every `tool_use` block id an assistant record carries.
+
+    Counted per record and deduped on the block id, NOT taken from the
+    message-id map: Claude Code writes ONE record per content block, all sharing
+    a single `message.id`. Deduping records by that id is right for usage — the
+    last record carries the message's final token counts — but it throws away
+    every block but the last, so a message that fired three tools in parallel
+    counted as one, or as zero if it ended on text.
+
+    That is exactly why the log-derived count came out at 16 where the
+    notification's `<tool_uses>` said 28. Checked against every subagent log on
+    disk: the raw block count matches the notification in every case, and all
+    10,259 `tool_use` ids across every transcript are unique, so counting ids
+    can neither undercount a parallel batch nor double-count a repeated record.
+    """
+    msg = rec.get("message") or {}
+    content = msg.get("content")
+    if not isinstance(content, list):
+        return
+    mid = msg.get("id") or rec.get("uuid")
+    for i, b in enumerate(content):
+        if isinstance(b, dict) and b.get("type") == "tool_use":
+            # Every real block carries an id. The `(message id, position)`
+            # fallback is for synthetic records only, and keeps the old
+            # message-id dedup rather than trusting a bare repeat.
+            turn._tools.add(b.get("id") or f"{mid}:{i}")
 
 
 def _load(path: str) -> list[dict]:
@@ -213,6 +243,11 @@ def _notification_turn(text: str, seq: int, ts: str | None) -> Turn | None:
     tok = _SUBAGENT_TOKENS_RE.search(text)
     if not tid or not tok:
         return None
+    # `<tool_uses>` and `<duration_ms>` count only THIS notification's segment,
+    # unlike `<subagent_tokens>`, which is cumulative for the agent. A resumed
+    # agent that notified 4 then 2 really made 6 calls, so neither MAX nor
+    # first-wins is right here — only the agent's own log has the true total,
+    # and it outranks this envelope wherever it exists.
     tools = _TOOL_USES_RE.search(text)
     dur = _DURATION_RE.search(text)
     return Turn(
@@ -354,6 +389,7 @@ def _agent_turn_from_log(main_path: str, agent_id: str, seq: int,
         mid = (rec.get("message") or {}).get("id") or rec.get("uuid")
         if mid:
             turn._msgs[mid] = rec
+        _collect_tools(turn, rec)
     if not turn._msgs:
         return None
     turn.started_at = min(turn._stamps) if turn._stamps else fallback_ts
@@ -425,6 +461,7 @@ def parse_turns(path: str, include_sidechain: bool = False) -> list[Turn]:
             mid = (rec.get("message") or {}).get("id") or rec.get("uuid")
             if mid:
                 cur._msgs[mid] = rec
+            _collect_tools(cur, rec)
             if rec.get("timestamp"):
                 cur._stamps.append(rec["timestamp"])
 
@@ -473,12 +510,6 @@ def _finalize(turn: Turn) -> None:
         cc = usage.get("cache_creation")
         if isinstance(cc, dict):
             turn.cache_creation_1h_tokens += int(cc.get("ephemeral_1h_input_tokens") or 0)
-        content = msg.get("content")
-        if isinstance(content, list):
-            turn.num_tool_calls += sum(
-                1 for b in content
-                if isinstance(b, dict) and b.get("type") == "tool_use"
-            )
         ts = rec.get("timestamp")
         if ts and (last_ts is None or ts > last_ts):
             last_ts = ts
@@ -486,6 +517,7 @@ def _finalize(turn: Turn) -> None:
             last_model = msg["model"]
         if rec.get("effort"):
             last_effort = rec["effort"]
+    turn.num_tool_calls += len(turn._tools)
     turn.ended_at = last_ts
     turn.model = last_model
     turn.effort = last_effort

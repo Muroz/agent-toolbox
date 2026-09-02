@@ -57,6 +57,16 @@ def _sub_assistant(mid, ts, *, out, cread, cwrite, cwrite_1h=0, tools=0):
                                       "ephemeral_1h_input_tokens": cwrite_1h}}}}
 
 
+def _sub_record(mid, ts, idx, content, *, out):
+    """One record of an assistant message that Claude Code split per block."""
+    return {"type": "assistant", "uuid": f"u-{mid}-{idx}", "timestamp": ts,
+            "message": {"role": "assistant", "id": mid, "model": "claude-opus-5",
+                        "content": content,
+                        "usage": {"input_tokens": 2, "output_tokens": out,
+                                  "cache_read_input_tokens": 0,
+                                  "cache_creation_input_tokens": 0}}}
+
+
 class SubagentLogTest(unittest.TestCase):
 
     def setUp(self):
@@ -200,6 +210,41 @@ class SubagentLogTest(unittest.TestCase):
         self.assertEqual(t.agent_type, "Plan")
         self.assertEqual(t.query_source, "subagent")
         self.assertEqual(t.is_prompt, False)
+
+    def test_a_message_split_across_records_keeps_every_tool_call(self):
+        """Claude Code writes one record per content block, sharing `message.id`.
+
+        Deduping records by that id is right for usage — the last record carries
+        the message's final counts — but counting tool calls off the deduped map
+        threw away every block but the last: a message that fired three tools in
+        parallel counted as one, or as zero if it ended on text. That is why the
+        log said 16 tool calls where the notification's `<tool_uses>` said 28.
+        Checked against every subagent log on disk, the block count matches the
+        notification exactly, and every `tool_use` id is unique.
+        """
+        self._main_transcript()
+        self._write_agent_log("split", [
+            _sub_record("s1", "2026-09-01T10:01:00Z", 0,
+                        [{"type": "text", "text": "planning"}], out=1),
+            _sub_record("s1", "2026-09-01T10:01:01Z", 1,
+                        [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}],
+                        out=1),
+            _sub_record("s1", "2026-09-01T10:01:02Z", 2,
+                        [{"type": "tool_use", "id": "t2", "name": "Read", "input": {}}],
+                        out=1),
+            # The final record of the message carries its real usage, and ends
+            # on text — the old count read only this one and saw no tools at all.
+            _sub_record("s1", "2026-09-01T10:01:03Z", 3,
+                        [{"type": "text", "text": "done"}], out=280),
+            _sub_record("s2", "2026-09-01T10:02:00Z", 0,
+                        [{"type": "tool_use", "id": "t3", "name": "Bash", "input": {}}],
+                        out=40),
+        ])
+
+        t = self._agents()["agent:split"]
+        self.assertEqual(t.num_tool_calls, 3)
+        # Usage still deduped on message.id: the last record of each message.
+        self.assertEqual(t.output_tokens, 320)
 
     def test_discovery_does_not_invent_agents(self):
         self._main_transcript()
