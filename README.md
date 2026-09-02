@@ -7,6 +7,8 @@ A personal Agent toolbox marketplace (Primarily for [Claude Code](https://code.c
 ```
 agent-toolbox/
 ├── .claude-plugin/marketplace.json   # lists every installable piece
+├── prefs/                            # personal rules, loaded every session
+├── scripts/prefs.sh                  # installs prefs/ into ~/.claude/rules/
 └── plugins/
     ├── claude-performance-tracker/   # plugin #1
     └── branch-token-tracker/         # plugin #2
@@ -34,6 +36,26 @@ Update later with `claude plugin marketplace update agent-toolbox`.
 |--------|-------------|
 | [claude-performance-tracker](plugins/claude-performance-tracker) | Measure and qualify how you use agents — token/time/prompt cost per successful outcome, approach comparison, prompt quality, and model-degradation trends. |
 | [branch-token-tracker](plugins/branch-token-tracker) | Attribute token spend to the task-tracker id in your git branch name, so a ticket's real cost is answerable. |
+
+## Personal preferences
+
+`prefs/` holds rules that apply to every session in every project — writing
+style and a ban on AI attribution in commits and PRs. Install them once per
+machine:
+
+```bash
+git clone git@github.com:Muroz/agent-toolbox.git   # anywhere you like
+cd agent-toolbox && ./scripts/prefs.sh install
+```
+
+That links each `prefs/*.md` into `~/.claude/rules/`, which Claude Code loads
+unconditionally at session start. The installer resolves the repo root from its
+own location, so no path is pinned anywhere; `./scripts/prefs.sh status` reports
+dangling links after a move and `install` repairs them. See
+[prefs/README.md](prefs/README.md) for `--copy`, `--force` and `uninstall`.
+
+These are rules rather than a plugin because a plugin cannot ship always-on
+instructions — only skills, agents, hooks and output styles.
 
 ## Development
 
