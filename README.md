@@ -1,6 +1,8 @@
 # agent-toolbox
 
-A personal Agent toolbox marketplace (Primarily for [Claude Code](https://code.claude.com)). A monorepo for hosting plugins, skills, hooks, subagents and anything else I'm currently testing as I go deeper into AI intensive workflows under one installable source.
+A personal plugin marketplace for [Claude Code](https://code.claude.com). It
+holds plugins, skills, hooks and subagents in one repo, so any of them installs
+from a single source.
 
 ## Layout
 
@@ -10,104 +12,99 @@ agent-toolbox/
 ├── prefs/                            # personal rules, loaded every session
 ├── scripts/prefs.sh                  # installs prefs/ into ~/.claude/rules/
 └── plugins/
-    ├── claude-performance-tracker/   # plugin #1
-    └── branch-token-tracker/         # plugin #2
+    ├── claude-performance-tracker/
+    └── branch-token-tracker/
 ```
 
-New pieces are added as subdirectories under `plugins/` and registered as entries in
-`marketplace.json`. Because `metadata.pluginRoot` is `./plugins`, each entry's `source`
-is just the subdirectory name.
+Add a new piece as a subdirectory under `plugins/` and register it in
+`marketplace.json`.
+
+## Plugins
+
+| Plugin | What it does |
+|--------|--------------|
+| [claude-performance-tracker](plugins/claude-performance-tracker) | Measures how you use agents: token, time and prompt cost per successful outcome, approach comparison, prompt quality, and model-degradation trends. |
+| [branch-token-tracker](plugins/branch-token-tracker) | Attributes token spend to the task-tracker id in your git branch name, so you can answer what a ticket cost. |
 
 ## Install
 
 ```bash
-# Add this marketplace once (from a local clone, GitHub shorthand, or git URL)
-claude plugin marketplace add ~/Coding/agent-toolbox
+# Add this marketplace once, from a local clone, GitHub shorthand, or a git URL
+claude plugin marketplace add /path/to/agent-toolbox
 
 # Then install any plugin individually
 claude plugin install claude-performance-tracker@agent-toolbox
 ```
 
-Update later with `claude plugin marketplace update agent-toolbox`.
+To pick up later changes, run `claude plugin marketplace update agent-toolbox`.
 
-## Plugins
-
-| Plugin | Description |
-|--------|-------------|
-| [claude-performance-tracker](plugins/claude-performance-tracker) | Measure and qualify how you use agents — token/time/prompt cost per successful outcome, approach comparison, prompt quality, and model-degradation trends. |
-| [branch-token-tracker](plugins/branch-token-tracker) | Attribute token spend to the task-tracker id in your git branch name, so a ticket's real cost is answerable. |
+> **Warning:** `claude plugin uninstall` deletes the plugin's data directory
+> along with the plugin. Both trackers keep months of capture there. Back the
+> database up first. See each plugin's README.
 
 ## Personal preferences
 
-`prefs/` holds rules that apply to every session in every project — writing
-style and a ban on AI attribution in commits and PRs. Install them once per
-machine:
+`prefs/` holds rules that apply to every session in every project. Install them
+once per machine:
 
 ```bash
-git clone git@github.com:Muroz/agent-toolbox.git   # anywhere you like
+git clone https://github.com/Muroz/agent-toolbox.git
 cd agent-toolbox && ./scripts/prefs.sh install
 ```
 
-That links each `prefs/*.md` into `~/.claude/rules/`, which Claude Code loads
-unconditionally at session start. The installer resolves the repo root from its
-own location, so no path is pinned anywhere; `./scripts/prefs.sh status` reports
-dangling links after a move and `install` repairs them. See
-[prefs/README.md](prefs/README.md) for `--copy`, `--force` and `uninstall`.
-
-These are rules rather than a plugin because a plugin cannot ship always-on
-instructions — only skills, agents, hooks and output styles.
+That links each `prefs/*.md` into `~/.claude/rules/`, which Claude Code loads at
+the start of every session. See [prefs/README.md](prefs/README.md) for the
+options and for why these are rules rather than a plugin.
 
 ## Development
 
-### Adding a new plugin
+### Add a new plugin
 
-1. Create a subdirectory under `plugins/<name>/` with at least
-   `.claude-plugin/plugin.json` (the `name` field is required).
-2. Add an entry to `.claude-plugin/marketplace.json` with an **explicit relative
-   source**: `"source": "./plugins/<name>"`.
-   > Use the explicit `./plugins/...` path form. The `metadata.pluginRoot` +
-   > bare-name shorthand is rejected by some Claude Code versions
-   > ("source type your Claude Code version does not support").
-3. A plugin can be atomic — just a skill, just a `hooks/hooks.json`, or just an
-   agent. Only `plugin.json` (`name`) is strictly required.
+1. Create `plugins/<name>/` with at least `.claude-plugin/plugin.json`. The
+   `name` field is the only required one.
+2. Add an entry to `.claude-plugin/marketplace.json` with an explicit relative
+   source: `"source": "./plugins/<name>"`.
 
-### Iterate without installing (fastest loop)
+   Use that path form. Some Claude Code versions reject the
+   `metadata.pluginRoot` shorthand with "source type your Claude Code version
+   does not support".
+3. A plugin can be a single piece: one skill, one `hooks/hooks.json`, or one
+   agent. Only `plugin.json` is required.
 
-Load the plugin straight from the working tree for a single session — picks up
-your latest edits each launch, no reinstall, no cache:
+### Iterate without installing
+
+This is the fastest loop. Claude Code loads the plugin straight from the working
+tree for one session and picks up your latest edits on each launch, with no
+reinstall and no cache:
 
 ```bash
-claude --plugin-dir ~/Coding/agent-toolbox/plugins/claude-performance-tracker
+claude --plugin-dir /path/to/agent-toolbox/plugins/claude-performance-tracker
 ```
 
-Repeatable for multiple plugins (`--plugin-dir A --plugin-dir B`).
+Repeat the flag for more than one plugin: `--plugin-dir A --plugin-dir B`.
 
 ### Refresh the installed copy
 
-The marketplace caches a **snapshot** of the plugin at its `version`. `claude
-plugin update` is a no-op while the version is unchanged, so for same-version dev
-edits, reinstall:
-
-```bash
-claude plugin uninstall claude-performance-tracker@agent-toolbox
-claude plugin marketplace update agent-toolbox
-claude plugin install claude-performance-tracker@agent-toolbox
-```
-
-Alternatively, bump `version` in both the plugin's `plugin.json` and its
-`marketplace.json` entry, then:
+The marketplace caches a snapshot of the plugin at its `version`, so
+`claude plugin update` does nothing while the version is unchanged. Bump
+`version` in both the plugin's `plugin.json` and its `marketplace.json` entry,
+then:
 
 ```bash
 claude plugin marketplace update agent-toolbox
 claude plugin update claude-performance-tracker@agent-toolbox   # restart to apply
 ```
 
-Verify what's installed: `claude plugin details claude-performance-tracker@agent-toolbox`
-(shows the component inventory: skills, agents, hooks).
+An update preserves the plugin's data directory. Uninstalling and reinstalling
+does not, so prefer the version bump.
+
+To see what is installed, including the skills, agents and hooks it ships, run
+`claude plugin details claude-performance-tracker@agent-toolbox`.
 
 ### Run the tests
 
-Dependency-free (stdlib `unittest`), runnable with just `python3`:
+Each plugin's suite uses the standard library `unittest` and has no
+dependencies:
 
 ```bash
 cd plugins/claude-performance-tracker
