@@ -23,13 +23,13 @@ Add a new piece as a subdirectory under `plugins/` and register it in
 
 | Plugin | What it does |
 |--------|--------------|
-| [claude-performance-tracker](plugins/claude-performance-tracker) | Measures how you use agents: token, time and prompt cost per successful outcome, approach comparison, prompt quality, and model-degradation trends. |
+| [claude-performance-tracker](plugins/claude-performance-tracker) | Measures how you use agents: token, time and prompt cost per successful outcome, approach comparison, prompt quality and model-degradation trends. |
 | [branch-token-tracker](plugins/branch-token-tracker) | Attributes token spend to the task-tracker id in your git branch name, so you can answer what a ticket cost. |
 
 ## Install
 
 ```bash
-# Add this marketplace once, from a local clone, GitHub shorthand, or a git URL
+# Add this marketplace once, from a local clone, GitHub shorthand or a git URL
 claude plugin marketplace add /path/to/agent-toolbox
 
 # Then install any plugin individually
@@ -68,7 +68,7 @@ options and for why these are rules rather than a plugin.
    Use that path form. Some Claude Code versions reject the
    `metadata.pluginRoot` shorthand with "source type your Claude Code version
    does not support".
-3. A plugin can be a single piece: one skill, one `hooks/hooks.json`, or one
+3. A plugin can be a single piece: one skill, one `hooks/hooks.json` or one
    agent. Only `plugin.json` is required.
 
 ### Iterate without installing

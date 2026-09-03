@@ -5,7 +5,7 @@ All notable changes to claude-performance-tracker.
 After any upgrade that changes how transcripts are parsed, run `cpt backfill`.
 It corrects a database written by an older version in place: refilling truncated
 envelopes, dropping rows the parser no longer produces, relabeling mislabeled
-subagent rows, and recomputing each affected run's aggregates, signals and
+subagent rows and recomputing each affected run's aggregates, signals and
 inferred outcome.
 
 ## 0.7.1
@@ -50,13 +50,13 @@ inferred outcome.
 - Add `cpt backfill` and `cpt sweep`.
 - Remove the `SubagentStop` hook. Its payload's `transcript_path` is the main
   transcript, so firing mid-turn it captured the in-flight main turn with only
-  the tokens produced so far, mislabeled it `subagent`, and pinned it. Turns
+  the tokens produced so far, mislabeled it `subagent` and pinned it. Turns
   that spawned a subagent lost about 89% of their output. Subagent spend now
   comes from the `Agent` tool results instead.
 - Remove the `UserPromptSubmit` hook. Capture happens at `Stop`, when usage is
   known, so this hook only ever spawned a process to do nothing.
 - Exclude Claude Code's injected records from the turn boundary:
-  `<task-notification>`, local-command caveats and stdout, and
+  `<task-notification>`, local-command caveats and stdout and
   `[Request interrupted…]`. Counting them inflated `num_prompts` by about 19%.
 
 ## 0.3.0
@@ -64,7 +64,7 @@ inferred outcome.
 - Add `cpt report recommend`, the actionable form of `compare`, surfaced
   automatically at `/track` time.
 - Add `cpt report antipatterns`: recurring friction across runs, with the share
-  landing in a bad outcome, where each clusters, and friction signals that have
+  landing in a bad outcome, where each clusters and friction signals that have
   no matching rubric dimension flagged as candidates to add.
 - Add `/usage-lessons` and the `lessons-synthesizer` subagent, which turn the
   run history into a durable, git-shareable playbook.
@@ -91,5 +91,5 @@ inferred outcome.
 ## 0.1.0
 
 - First release. Hooks capture every session, `/track` brackets a deliberate
-  run, `/evaluate-run` scores it against a rubric, and `/usage-report` reads it
+  run, `/evaluate-run` scores it against a rubric and `/usage-report` reads it
   back.

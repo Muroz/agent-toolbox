@@ -13,7 +13,7 @@ how it went.
 
 ## Input
 
-You are given the path to (or content of) one run's transcript slice, the `run_id`, and
+You are given the path to (or content of) one run's transcript slice, the `run_id` and
 the rubric at `scripts/rubric.yaml` (load the current `version`).
 
 ## What to do
@@ -30,7 +30,7 @@ the rubric at `scripts/rubric.yaml` (load the current `version`).
 
 Do not let surface features stand in for quality:
 
-- **Length is not effort.** A long transcript, a verbose rationale, or many tool calls are
+- **Length is not effort.** A long transcript, a verbose rationale or many tool calls are
   not evidence of a good run — sometimes they're the opposite (thrash, reasoning loops).
 - **Confidence is not correctness.** Score what the transcript shows happened, not how
   assured the assistant sounded.

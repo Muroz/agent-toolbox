@@ -1,6 +1,6 @@
 ---
 name: usage-lessons
-description: Synthesize a durable, git-shareable usage playbook from all your tracked runs — what approaches work, recurring friction, weak prompt habits, and drift. Uses the lessons-synthesizer subagent. Runs out of the hot path.
+description: Synthesize a durable, git-shareable usage playbook from all your tracked runs — what approaches work, recurring friction, weak prompt habits and drift. Uses the lessons-synthesizer subagent. Runs out of the hot path.
 ---
 
 # /usage-lessons — synthesize a durable playbook
@@ -32,8 +32,8 @@ guidance. Deliberate / batched — never run it in the hot path.
    This file survives plugin updates. Show the user the path and a short summary.
 
 4. **(Opt-in) Share it via git.** Only if the user asks to feed it into a version-controlled
-   file (e.g. the project's `CLAUDE.md`), inject it as a **delimited, idempotent block** so
-   re-running replaces just that block and never clobbers surrounding content:
+   file (for example, the project's `CLAUDE.md`), inject it as a **delimited, idempotent
+   block** so re-running replaces just that block and never clobbers surrounding content:
 
    ```
    <!-- cpt-lessons:start -->

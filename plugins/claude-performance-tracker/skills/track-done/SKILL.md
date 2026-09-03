@@ -13,7 +13,7 @@ without resuming it.
 ## Steps
 
 1. Gather from the user — ask, do not guess (use AskUserQuestion):
-   - **outcome** — `success`, `partial`, or `failed`.
+   - **outcome** — `success`, `partial` or `failed`.
    - **satisfaction** — an integer 1–5.
    - **note** — optional free text.
 2. Close the run (scoped to this session):

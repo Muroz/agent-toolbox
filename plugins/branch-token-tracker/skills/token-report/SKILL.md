@@ -19,7 +19,7 @@ there is nothing to start or stop.
      `--since 2026-08-01 --until 2026-08-15`. Both bounds also take `<n>d`/`<n>h` or a
      `2026-08-01T09:30` datetime. **Absolute values are local dates**, and a bare `--until`
      date includes that whole day — so "the 1st to the 15th" is exactly those two flags.
-     Anything unparsable is reported as ignored, never silently dropped.
+     The report names anything unparsable as ignored rather than dropping it silently.
    - **spend over time** ("per day", "how has it trended", "week by week") → `--by day`,
      `--by week` (Monday-start) or `--by month`. Combine with a ticket to get that ticket
      day by day, and with `--since`/`--until` to bound it.
@@ -47,19 +47,19 @@ there is nothing to start or stop.
    ticket dominates, and whether cache-read (usually the bulk) or output tokens drive it.
    For a `--by` report, say what the trend is rather than restating the rows.
 
-   Rank on **weighted** tokens, not the raw total: raw is ~95% cache reads, which bill at a
-   tenth of input, so it ranks by session length rather than cost. Subagent spend is included
-   in weighted, read from each agent's own transcript. The exception is an agent whose log is
+   Rank on **weighted** tokens, not the raw total: raw is about 95% cache reads, which bill at a
+   tenth of input, so it ranks by session length rather than cost. Weighted includes subagent
+   spend, read from each agent's own transcript. The exception is an agent whose log is
    gone, which leaves only a bare total — it shows in raw and is left out of weighted, since a
    single number cannot be split across classes that bill at 1x, 5x and 0.1x.
 
-   Timestamps are stored in UTC but every bound and bucket is local, so the days in the
+   The store keeps timestamps in UTC, but every bound and bucket is local, so the days in the
    output are the user's own calendar days.
 
 ## Ticket ids come from the branch name
 
 Extraction is regex-driven and configurable. Defaults match `PROJ-412`-style ids and `#883`
-issue refs; anything unmatched (e.g. work on `main`) rolls up under `unassigned`.
+issue refs; anything unmatched (for example, work on `main`) rolls up under `unassigned`.
 
 To customize, write `.branch-tokens.json` at the repo root (or `~/.claude/branch-tokens.json`
 for a global default):
@@ -72,8 +72,8 @@ for a global default):
 }
 ```
 
-Patterns are tried in order; the first match wins, using the `id` named group when present.
-`$BTT_PATTERN` overrides everything for a one-off run.
+The plugin tries patterns in order, and the first match wins, using the `id` named group
+when present. `$BTT_PATTERN` overrides everything for a one-off run.
 
 If the user's ids aren't being picked up, check the branch name against the pattern before
 assuming capture is broken — `btt report` shows what actually got extracted.

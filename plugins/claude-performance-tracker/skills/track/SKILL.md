@@ -12,7 +12,7 @@ tracked run overrides passive capture and stays open across `/clear` and across 
 until `/track-done` closes it (ending a session merely *pauses* it — resume later with
 `/track-resume`).
 
-Best invoked at the **start** of a fresh context (e.g. right after `/clear` or in a new
+Best invoked at the **start** of a fresh context (for example, right after `/clear` or in a new
 session) so the measured envelope is clean.
 
 ## Steps
@@ -20,9 +20,9 @@ session) so the measured envelope is clean.
 1. Gather these from the user — ask, do not guess (use AskUserQuestion for the choices):
    - **label** — short description of the task (free text).
    - **type** — one of: `bugfix`, `feature`, `refactor`, `research`, `debug`, `other`.
-   - **size** — `S`, `M`, or `L` (rough expected effort).
+   - **size** — `S`, `M` or `L` (rough expected effort).
    - **approach** — optional free text describing the intended approach
-     (e.g. "plan-mode + opus-4-8, no subagents").
+     (for example, "plan-mode + opus-4-8, no subagents").
 
    **Recommender nudge** — right after the user gives **type** and **size**, and
    *before* asking for the approach, look up what has historically worked best for
@@ -44,7 +44,7 @@ session) so the measured envelope is clean.
      --label "<label>" --type <type> --size <size> --approach "<approach>"
    ```
 
-   If `cpt` is not on PATH (e.g. dev mode), resolve the bundled script and call it:
+   If `cpt` is not on PATH (for example, in dev mode), resolve the bundled script and call it:
 
    ```bash
    TRACK=$(ls -t ~/.claude/plugins/cache/*/claude-performance-tracker/*/scripts/track.py 2>/dev/null | head -1)

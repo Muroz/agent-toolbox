@@ -4,7 +4,7 @@ Attributes token spend to the task-tracker id in your git branch name.
 
 Your branch name already names the ticket: `feature/PROJ-412-add-login` says
 exactly which ticket the next few hours belong to. This plugin reads that,
-counts the tokens every turn costs, and rolls them up per ticket. No `/start`,
+counts the tokens every turn costs and rolls them up per ticket. No `/start`,
 no `/stop`, no rubric, no judge.
 
 ```
@@ -49,7 +49,7 @@ Three hooks, one table, no state machine.
 | --- | --- |
 | `SessionStart` | Initializes the database and prints the current ticket's running total into session context. |
 | `Stop` | Resolves the branch, then inserts any turns not yet stored. |
-| `SessionEnd` | Captures a final time, writes `current.json`, and echoes a session summary. |
+| `SessionEnd` | Captures a final time, writes `current.json` and echoes a session summary. |
 
 The plugin resolves the branch at every `Stop`, not once per session. Switch
 branches mid-session and the turns before the switch stay on the old ticket
@@ -107,7 +107,7 @@ spend more precisely:
 
 Only the bare number cannot be weighted. Output bills 5x input and cache writes
 1.25x, so a single total cannot be split by guesswork. It lands in
-`total_tokens_agg`, counts toward the raw total, and stays out of the weighted
+`total_tokens_agg`, counts toward the raw total and stays out of the weighted
 figure.
 
 ### Weighted compared with raw tokens
@@ -169,7 +169,7 @@ otherwise. `pattern`, a bare string, is a synonym for a one-element `patterns`.
 | `main` | `unassigned` |
 
 Nothing here can raise. A malformed regex, an unreadable config, a detached
-HEAD, or a working directory outside a repo all degrade to the fallback. This
+HEAD or a working directory outside a repo all degrade to the fallback. This
 code runs inside a session hook, so failing loudly would interrupt real work.
 
 ### Worked example: ClickUp ids
@@ -239,7 +239,7 @@ btt report --format csv > tokens.csv   # or --format json
 
 ### Time ranges
 
-`--since` and `--until` each accept a relative window, an absolute date, or an
+`--since` and `--until` each accept a relative window, an absolute date or an
 absolute datetime:
 
 ```bash
@@ -331,7 +331,7 @@ database, separate data directory, no shared code.
 
 `claude-performance-tracker` answers which approach is cheapest per successful
 outcome, and pays for it with explicit `/track` and `/track-done` bracketing, a
-rubric, and a judge subagent. This one answers what ticket X cost, and asks
+rubric and a judge subagent. This one answers what ticket X cost, and asks
 nothing of you. Install either, or both.
 
 ## Layout

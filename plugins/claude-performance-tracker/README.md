@@ -6,7 +6,7 @@ captures and prepares usage information so that you can answer two questions:
 
 1. **Am I using agents well?** And is the model drifting over time?
 2. **Which approach is better for this kind of task?** Which model, permission
-   mode, subagent strategy, or skill gets a task done for the least token, time
+   mode, subagent strategy or skill gets a task done for the least token, time
    and prompt cost.
 
 The plugin reconstructs everything from the session transcripts Claude Code
@@ -49,7 +49,7 @@ run. When you want a summary:
 Bracket each attempt so the plugin measures its cost on its own:
 
 ```
-/track                 # name the task, its type and size, and the approach
+/track                 # name the task, its type, its size and the approach
 …do the work…
 /track-done            # report the outcome: success, partial or failed, plus a 1-5 score
 ```
@@ -127,7 +127,7 @@ cpt eval reconcile --run-id <run_id>           # disagreement across judge passe
 **Run**
 
 The unit of analysis: a bounded stretch of work with one cost summary, one
-approach, and one outcome. `run_id` is session-independent, so a run can own
+approach and one outcome. `run_id` is session-independent, so a run can own
 turns from several sessions.
 
 - **Passive run.** Opened automatically per session, with an inferred outcome.
@@ -192,8 +192,8 @@ no migration.
 
 | Hook | Role |
 |------|------|
-| `SessionStart` | Sets up and migrates the database, which is safe to run repeatedly, opens the session's passive run, and sweeps runs abandoned by a crash. |
-| `Stop` | Does the main work: parses the transcript, inserts new turns, and refreshes existing envelopes. |
+| `SessionStart` | Sets up and migrates the database, which is safe to run repeatedly, opens the session's passive run and sweeps runs abandoned by a crash. |
+| `Stop` | Does the main work: parses the transcript, inserts new turns and refreshes existing envelopes. |
 | `SessionEnd` | Closes the passive run: aggregates turns, computes the signal summary, infers the outcome. |
 
 There is deliberately no `SubagentStop` hook and no `UserPromptSubmit` hook. See
@@ -221,8 +221,8 @@ setting is harmless when pyenv is not installed.
 ### Turn parsing (`transcript.py`)
 
 - A turn starts at a real user prompt: a `type=user` line that is not `isMeta`,
-  not a tool result, and not one of Claude Code's injected records, such as
-  `<task-notification>`, local-command caveats and stdout, or
+  not a tool result and not one of Claude Code's injected records, such as
+  `<task-notification>`, local-command caveats and stdout or
   `[Request interrupted…]`. Those inject no prompt, so they fold into the turn
   already in progress.
 - Assistant lines appear more than once in the transcript, since the same
@@ -321,7 +321,7 @@ the transcript and will arrive with the OpenTelemetry upgrade.
 ### Inferred outcome (`infer_outcome.py`)
 
 Passive runs get a rough outcome from deterministic signals, namely positive and
-negative cues in prompts, interrupts, re-prompts, and whether any output was
+negative cues in prompts, interrupts, re-prompts and whether any output was
 produced, through a documented six-step decision. The plugin stores it with
 `outcome_source='inferred'` and saves the signals as JSON in `inferred_signals`
 so you can audit the result. When the signals are not clear enough, the outcome
@@ -331,7 +331,7 @@ self-reported ones: the compare view uses `self_report` only.
 ### Qualitative scoring (`evaluate.py` and `usage-evaluator`)
 
 `/evaluate-run` picks its targets, either a run id or recent runs not yet
-judged, gathers the context of transcripts, per-turn prompts and the rubric, and
+judged, gathers the context of transcripts, per-turn prompts and the rubric, and then
 hands it to the `usage-evaluator` subagent, which runs on Haiku at low effort
 and returns a structured verdict. The plugin then saves one `judge_verdicts` row
 plus detailed `scores` rows.
@@ -354,7 +354,7 @@ The plugin computes all numbers at read time from the raw `runs`, `turns` and
 `scores` tables. Nothing is pre-aggregated, so any new report or exporter is
 just another query.
 
-- `overview` — totals, plus by-model, by-project and by-day, and by-query-source
+- `overview` — totals, plus by-model, by-project, by-day and by-query-source
   when subagents ran.
 - `compare` — cost-per-success ranking bucketed by task type and size, with a
   small-sample guard.
@@ -483,7 +483,7 @@ cpt sweep       # finalize runs abandoned by a crash (also runs at SessionStart)
 
 `backfill` corrects a database written by an older version in place: it refills
 truncated envelopes, drops rows the parser no longer produces, relabels
-mislabeled subagent rows, and recomputes every affected run's aggregates,
+mislabeled subagent rows and recomputes every affected run's aggregates,
 signals and inferred outcome. It only rewrites sessions whose transcript still
 exists; for the rest it applies what it can establish from the stored row alone.
 Both commands are safe to re-run. Run `backfill` after upgrading, and see
@@ -506,6 +506,7 @@ claude-performance-tracker/
 │   ├── cost.py          # weighted (input-equivalent) tokens + USD estimate
 │   ├── transcript.py    # turn parsing (dedup, boundaries, subagent rows)
 │   ├── store.py         # run/turn persistence, tracked-run lifecycle, finalize
+│   ├── track.py         # start · pause · resume · done · list (the skills call this)
 │   ├── signals.py       # deterministic signal summary derivation
 │   ├── infer_outcome.py # passive-run outcome heuristic
 │   ├── evaluate.py      # list-unjudged · context · persist · reconcile
@@ -549,7 +550,7 @@ Compared with wiring up raw skills, hooks and a subagent separately:
   file, and the plugin's `${CLAUDE_PLUGIN_DATA}` is a persistent directory that
   survives updates. Loose components have no agreed, stable data path.
 - One install, one uninstall, one version. Merging hook config into
-  `settings.json` by hand, copying a subagent, and symlinking skills is
+  `settings.json` by hand, copying a subagent and symlinking skills is
   error-prone and leaves orphans behind. `claude plugin install` and
   `uninstall` are atomic.
 - Auto-namespacing as `/claude-performance-tracker:track` avoids collisions with
@@ -559,7 +560,7 @@ Compared with wiring up raw skills, hooks and a subagent separately:
 
 Compared with OpenTelemetry plus Prometheus or Grafana: that stack is good for
 metrics, but it requires a running collector or daemon, and it has no notion of
-task identity, outcome, or a rubric for good usage, which are the things that
+task identity, outcome or a rubric for good usage, which are the things that
 make this useful. OpenTelemetry is on the roadmap as a more precise data source,
 not as a replacement for the annotation and evaluation layer.
 

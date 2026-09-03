@@ -32,7 +32,7 @@ could not see is recovered rather than lost.
 ## 0.5.0
 
 - Add `--since` and `--until`, each accepting a relative window, an absolute
-  date, or an absolute datetime.
+  date or an absolute datetime.
 - Add `--by day|week|month` to group spend by local calendar period.
 
 ## 0.4.0
