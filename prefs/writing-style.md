@@ -48,3 +48,34 @@ name of an API.
 - When there is a choice, give one recommendation and a one-line why.
 - Survey the alternatives only when I ask, or when the runner-up is genuinely
   close.
+
+## Documents
+
+READMEs, design docs, changelogs, skill and agent files. Chat replies are
+covered by the rules above.
+
+- **Bold is a label, not a shout.** Use it to name a term at the head of a
+  bullet. Not mid-sentence for stress — sentence order carries that. Prompt
+  files are the exception: emphasis there steers a model, so it earns its keep.
+- **Spell out the Latin.** `for example` not `e.g.`, `that is` not `i.e.`,
+  `compared with` not `vs.`, `about 95%` not `~95%`. Finish the list rather than
+  writing `etc.`
+- **Keep symbols out of prose.** `→`, `×` and `≤` are fine in code, tables and
+  diagrams. In a sentence write `to`, `and`, `at most`. A warning is a
+  `**Warning:**` blockquote, never a `⚠`.
+- **No serial comma.** `hooks, skills and agents`. If dropping it creates
+  ambiguity, reorder the list instead of putting the comma back.
+- **Sentence case headings.** `Repairing an existing store`.
+- **Say who acts.** `the parser scans all three`, not `all three are scanned`.
+  Orwell's rule 4, and the one most often broken in a reference doc.
+- **A doc never mentions itself in the third person.** Name the section, not
+  "the README".
+- **Put the warning next to the trigger.** A caution about a destructive command
+  belongs under the instruction that runs it, not in an appendix.
+- **History goes in a changelog.** Reference sections describe what the code
+  does now. Keep the one instruction an upgrading reader needs, link the rest.
+- **Verify before shipping.** Run every command you document. Check every count,
+  sample output and diagram against reality. A wrong number in a doc goes
+  unnoticed for months.
+- **No personal paths.** `/path/to/repo`, not `~/Coding/repo`. Same for your own
+  remote and your own machine's layout.
