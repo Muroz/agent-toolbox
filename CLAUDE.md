@@ -1,7 +1,7 @@
 # agent-toolbox
 
 Personal Claude Code plugins. Read this before touching anything under `hooks/`,
-`bin/`, or `scripts/ingest.py`.
+`bin/` or `scripts/ingest.py`.
 
 ## The hook contract: a hook may never exit nonzero
 
