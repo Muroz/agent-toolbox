@@ -59,6 +59,10 @@ class HookExitCodeTest(unittest.TestCase):
                else [sys.executable, str(INGEST)]) + list(args)
         environ = dict(os.environ)
         environ.pop("BTT_DEBUG", None)  # stderr on a blocking event is user-facing
+        # Several cases below deliberately omit --data-dir. Without this the
+        # resolver falls back to whichever sibling dir the real hooks populated
+        # and the run overwrites the user's live current.json.
+        environ["CLAUDE_PLUGIN_DATA"] = self.data_dir
         environ.update(env or {})
         return subprocess.run(cmd, input=stdin, env=environ,
                               capture_output=True, text=True, timeout=60)
@@ -98,6 +102,29 @@ class HookExitCodeTest(unittest.TestCase):
             with self.subTest(data_dir=data_dir):
                 proc = self.run_hook("--event", "Stop", "--data-dir", data_dir)
                 self.assert_never_blocks(proc, f"--data-dir {data_dir!r}")
+
+    def test_the_suite_never_writes_to_the_real_data_dir(self):
+        """Guard for a second incident: tests that ate the user's live state.
+
+        Cases above deliberately omit --data-dir. The resolver then falls back to
+        whichever sibling dir the real hooks populated, so an unisolated run
+        overwrites the current.json the SessionStart banner reads. Only stdin and
+        argv vary between cases, so isolating the shared helper is the fix — this
+        asserts the helper keeps doing it.
+        """
+        import db
+
+        real = db.data_dir()  # whatever this machine's hooks actually write to
+        stamp = real / "current.json"
+        before = stamp.stat().st_mtime_ns if stamp.exists() else None
+
+        for args in ([], ["--event", "Stop"], ["--event", "Stop", "--data-dir"]):
+            with self.subTest(args=args):
+                self.run_hook(*args)  # exit code is covered above
+        after = stamp.stat().st_mtime_ns if stamp.exists() else None
+
+        self.assertEqual(before, after,
+                         f"a test run modified the live data dir at {real}")
 
     def test_launcher_survives_a_broken_interpreter(self):
         """A pyenv shim pointing at an uninstalled version must not block either."""
