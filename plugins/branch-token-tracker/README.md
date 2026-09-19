@@ -280,14 +280,19 @@ btt report PROJ-412 --by day           # one ticket's spend, day by day
 
 | day | turns | sessions | tickets | output | cache read | weighted | est. USD | raw total | active |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 2026-08-31 | 4 | 1 | 1 | 52,724 | 5,876,275 | 1,129,946 | $5.65 | 6,068,415 | 30m 21s |
-| 2026-09-01 | 15 | 2 | 2 | 133,358 | 31,036,125 | 4,900,210 | $24.50 | 31,973,691 | 1h 12m |
+| 2026-08-31 | 4 | 1 | 1 | 52,724 | 5,876,275 | 1,129,946 | $5.65 | 6,068,415 | 13m 27s |
+| 2026-09-01 | 22 | 4 | 3 | 258,130 | 50,643,629 | 8,352,460 | $41.76 | 51,987,333 | 1h 9m |
 ```
 
 Without a ticket argument, each row also counts the distinct tickets worked that
 period. With one, the table covers that ticket alone. `--format csv|json`
 carries the `period` column through, so a spend-over-time series exports
 directly.
+
+`active` is working time, not the span from first to last timestamp. Capture
+caps each idle gap inside a turn at 5 minutes, so a turn left open overnight
+adds its real work rather than a day. Subagent time is left out, since it runs
+inside a main turn that already counts those minutes.
 
 The dollar figure prices each bucket on the model that produced most of its
 output, so a bucket that mixed models is an approximation. That is why the exact

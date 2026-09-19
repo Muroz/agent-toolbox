@@ -233,5 +233,35 @@ class RenderingTest(_DB):
         self.assertIn("weeks start Monday", out)
 
 
+class ActiveTimeTest(_DB):
+    """The period view's `active` column is working time, not calendar span."""
+
+    def _raw(self, turn_id, *, start, end, active_ms, source="main"):
+        self.conn.execute(
+            """INSERT INTO turns (turn_id, session_id, ticket, started_at,
+                                  ended_at, active_ms, query_source)
+               VALUES (?, 's1', 'PROJ-1', ?, ?, ?, ?)""",
+            (turn_id, _stamp(start), _stamp(end), active_ms, source))
+        self.conn.commit()
+
+    def test_turn_left_open_overnight_counts_its_work_not_its_span(self):
+        start = _local(2026, 9, 18, 11, 33)
+        self._raw("t1", start=start, end=start + timedelta(hours=24, minutes=13),
+                  active_ms=13 * 60_000)
+        row = report.by_period(self.conn, "day")[0]
+        self.assertEqual(row["active_ms"], 13 * 60_000)
+        self.assertIn("| 13m 0s |", report.render_periods(
+            [row], "day", "", "", None, None))
+
+    def test_subagent_time_is_not_added_to_the_turn_it_ran_inside(self):
+        start = _local(2026, 9, 18, 9)
+        end = start + timedelta(minutes=10)
+        self._raw("t1", start=start, end=end, active_ms=10 * 60_000)
+        self._raw("agent:a", start=start, end=end, active_ms=8 * 60_000,
+                  source="subagent")
+        self.assertEqual(report.by_period(self.conn, "day")[0]["active_ms"],
+                         10 * 60_000)
+
+
 if __name__ == "__main__":
     unittest.main()

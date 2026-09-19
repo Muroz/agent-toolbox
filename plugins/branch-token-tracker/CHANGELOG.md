@@ -6,6 +6,13 @@ After any upgrade that changes how transcripts are parsed, run `btt backfill`.
 It re-derives turns from the transcripts still on disk, so spend an older parser
 could not see is recovered rather than lost.
 
+## 0.6.2
+
+- `btt report --by` now fills `active` from each turn's stored working time.
+  It used to show the span from a bucket's first timestamp to its last, so a
+  turn left open overnight read as a 24-hour day. CSV and JSON exports gain an
+  `active_ms` field.
+
 ## 0.6.1
 
 - Count every `tool_use` block rather than one per message.

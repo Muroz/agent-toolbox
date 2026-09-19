@@ -161,6 +161,8 @@ _SUMS = """COUNT(*) AS turns,
            COALESCE(SUM(total_tokens_agg),0) AS total_tokens_agg,
            COALESCE(SUM({W}),0) AS weighted_tokens,
            COALESCE(SUM(num_tool_calls),0) AS tool_calls,
+           COALESCE(SUM(CASE WHEN query_source = 'main'
+                             THEN active_ms END),0) AS active_ms,
            MIN(started_at) AS first_seen,
            MAX(ended_at) AS last_seen""".replace("{W}", cost.WEIGHTED_SQL)
 
@@ -177,6 +179,10 @@ def _row(r: sqlite3.Row, **extra) -> dict:
         "total_tokens_agg": r["total_tokens_agg"],
         "weighted_tokens": round(r["weighted_tokens"]),
         "tool_calls": r["tool_calls"],
+        # Working time: each turn's idle gaps are capped at capture. Subagents
+        # are left out because they run inside a main turn's span, so adding
+        # theirs would count the same minutes twice.
+        "active_ms": r["active_ms"],
         "first_seen": r["first_seen"], "last_seen": r["last_seen"],
     })
     d["total_tokens"] = (d["input_tokens"] + d["output_tokens"]
@@ -373,7 +379,7 @@ def render_periods(rows: list, period: str, window: str, notes: str,
         + ([] if ticket else [_n(r["tickets"])])
         + [_n(r["output_tokens"]), _n(r["cache_read_tokens"]),
            _n(r["weighted_tokens"]), _usd(r), _n(r["total_tokens"]),
-           _ms(r["wall_clock_ms"])]
+           _ms(r["active_ms"])]
         for r in rows])
     parts = [head, ""]
     note = notes.rstrip("\n")
@@ -383,7 +389,9 @@ def render_periods(rows: list, period: str, window: str, notes: str,
               f"({_n(total)} raw)**", "", body, "",
               f"_Buckets are local calendar {period}s"
               + (" (weeks start Monday)" if period == "week" else "")
-              + "; stored timestamps are UTC. Weighted tokens are "
+              + "; stored timestamps are UTC. Active is working time, with "
+              "each idle gap capped at 5 minutes; subagent time is not "
+              "added on top. Weighted tokens are "
               "input-equivalent units (output 5x, cache write 1.25-2x, cache "
               "read 0.1x) — the raw total is dominated by cache reads and is "
               "not a cost._"]
