@@ -12,7 +12,7 @@ agent-toolbox/
 ├── prefs/                            # personal rules, loaded every session
 ├── scripts/prefs.sh                  # installs prefs/ into ~/.claude/rules/
 └── plugins/
-    ├── claude-performance-tracker/
+    ├── perf-tracker/
     └── branch-token-tracker/
 ```
 
@@ -23,7 +23,7 @@ Add a new piece as a subdirectory under `plugins/` and register it in
 
 | Plugin | What it does |
 |--------|--------------|
-| [claude-performance-tracker](plugins/claude-performance-tracker) | Measures how you use agents: token, time and prompt cost per successful outcome, approach comparison, prompt quality and model-degradation trends. |
+| [perf-tracker](plugins/perf-tracker) | Measures how you use agents: token, time and prompt cost per successful outcome, approach comparison, prompt quality and model-degradation trends. |
 | [branch-token-tracker](plugins/branch-token-tracker) | Attributes token spend to the task-tracker id in your git branch name, so you can answer what a ticket cost. |
 
 ## Install
@@ -33,7 +33,7 @@ Add a new piece as a subdirectory under `plugins/` and register it in
 claude plugin marketplace add /path/to/agent-toolbox
 
 # Then install any plugin individually
-claude plugin install claude-performance-tracker@agent-toolbox
+claude plugin install perf-tracker@agent-toolbox
 ```
 
 To pick up later changes, run `claude plugin marketplace update agent-toolbox`.
@@ -61,7 +61,8 @@ options and for why these are rules rather than a plugin.
 ### Add a new plugin
 
 1. Create `plugins/<name>/` with at least `.claude-plugin/plugin.json`. The
-   `name` field is the only required one.
+   `name` field is the only required one. It must not start with `claude-`,
+   `anthropic-` or `cc-plugin-`: `claude plugin validate` reserves those.
 2. Add an entry to `.claude-plugin/marketplace.json` with an explicit relative
    source: `"source": "./plugins/<name>"`.
 
@@ -78,7 +79,7 @@ tree for one session and picks up your latest edits on each launch, with no
 reinstall and no cache:
 
 ```bash
-claude --plugin-dir /path/to/agent-toolbox/plugins/claude-performance-tracker
+claude --plugin-dir /path/to/agent-toolbox/plugins/perf-tracker
 ```
 
 Repeat the flag for more than one plugin: `--plugin-dir A --plugin-dir B`.
@@ -87,26 +88,31 @@ Repeat the flag for more than one plugin: `--plugin-dir A --plugin-dir B`.
 
 The marketplace caches a snapshot of the plugin at its `version`, so
 `claude plugin update` does nothing while the version is unchanged. Bump
-`version` in both the plugin's `plugin.json` and its `marketplace.json` entry,
-then:
+`version` in the plugin's `plugin.json`. Leave the `marketplace.json` entry
+without one: the manifest wins, and declaring both draws a validate warning.
+Then:
 
 ```bash
 claude plugin marketplace update agent-toolbox
-claude plugin update claude-performance-tracker@agent-toolbox   # restart to apply
+claude plugin update perf-tracker@agent-toolbox   # restart to apply
 ```
 
 An update preserves the plugin's data directory. Uninstalling and reinstalling
 does not, so prefer the version bump.
 
 To see what is installed, including the skills, agents and hooks it ships, run
-`claude plugin details claude-performance-tracker@agent-toolbox`.
+`claude plugin details perf-tracker@agent-toolbox`.
 
 ### Run the tests
 
-Each plugin's suite uses the standard library `unittest` and has no
-dependencies:
+`scripts/check.sh` validates the marketplace and every plugin with
+`claude plugin validate`, then runs each plugin's suite. It exits nonzero on
+the first failure.
+
+Each suite uses the standard library `unittest` and has no dependencies. To run
+one:
 
 ```bash
-cd plugins/claude-performance-tracker
+cd plugins/perf-tracker
 python3 -m unittest discover -s tests
 ```

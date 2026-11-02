@@ -429,12 +429,12 @@ source: `…-agent-toolbox` for a marketplace install, `…-inline` for
 read side scans the sibling directories and picks the populated one rather than
 guessing the unsuffixed name. See `_discover_populated_dir` in `scripts/db.py`.
 
-## Relationship to claude-performance-tracker
+## Relationship to perf-tracker
 
 A sibling plugin in the same marketplace, deliberately independent: separate
 database, separate data directory, no shared code.
 
-`claude-performance-tracker` answers which approach is cheapest per successful
+`perf-tracker` answers which approach is cheapest per successful
 outcome, and pays for it with explicit `/track` and `/track-done` bracketing, a
 rubric and a judge subagent. This one answers what ticket X cost, and asks
 nothing of you. Install either, or both.

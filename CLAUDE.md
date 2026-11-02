@@ -68,11 +68,27 @@ every event ever shipped is still accounted for. Do not weaken it.
   `~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`. It is a **copy**,
   not a link — editing this repo does *not* change an installed plugin, even for
   a `"source": "directory"` marketplace. Reaching an installed plugin takes a
-  version bump in `.claude-plugin/marketplace.json` plus
-  `claude plugin update <plugin>@agent-toolbox`.
+  `version` bump in the plugin's own `.claude-plugin/plugin.json` plus
+  `claude plugin update <plugin>@agent-toolbox`. The marketplace entries carry
+  no `version`: the manifest's wins, and declaring both draws a validate
+  warning. Claude Code deletes an orphaned version directory 14 days after an
+  update, so a session still running the old version keeps working until then.
+
+## Plugin names
+
+`claude plugin validate` rejects any name that starts with `claude-`,
+`anthropic-` or `cc-plugin-`, as reserved for Anthropic. That is why
+`perf-tracker` was renamed from `claude-performance-tracker` in 0.9.0.
+`${CLAUDE_PLUGIN_DATA}` is keyed by plugin name, so a rename strands the old
+data: `perf-tracker`'s `db.py` copies it across once (`_adopt_legacy_db`).
 
 ## Tests
 
-Stdlib `unittest`, no dependencies, per plugin:
+Run everything, validation included, from the repo root:
+
+    scripts/check.sh
+
+That runs `claude plugin validate` on the marketplace and each plugin, then
+each plugin's stdlib `unittest` suite. One suite on its own:
 
     cd plugins/<plugin> && python3 -m unittest discover -s tests

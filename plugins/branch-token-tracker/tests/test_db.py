@@ -85,9 +85,9 @@ class TestDataDirResolution(unittest.TestCase):
         self.assertEqual(db.data_dir(), populated)
 
     def test_the_other_plugins_data_dir_is_never_picked_up(self):
-        # claude-performance-tracker lives in the same parent directory and also
+        # perf-tracker lives in the same parent directory and also
         # has a `turns` table — the glob must not stray into it.
-        other = self.tmp / "claude-performance-tracker-agent-toolbox"
+        other = self.tmp / "perf-tracker-agent-toolbox"
         other.mkdir(parents=True)
         conn = sqlite3.connect(other / db.DB_NAME)
         conn.execute("CREATE TABLE turns (turn_id TEXT)")

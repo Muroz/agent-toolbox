@@ -1,4 +1,4 @@
-"""Canonical token-cost model (mirrors the copy in claude-performance-tracker).
+"""Canonical token-cost model (mirrors the copy in perf-tracker).
 
 Raw token counts are not comparable across approaches, because the four token
 classes are billed at very different rates. Summing them — which every report

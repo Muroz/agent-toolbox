@@ -5,7 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/bin/btt\" ingest --event SessionStart --data-dir \"${CLAUDE_PLUGIN_DATA}\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/bin/btt\" ingest --event SessionStart --data-dir \"${CLAUDE_PLUGIN_DATA}\"",
+            "timeout": 30
           }
         ]
       }
@@ -15,7 +16,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/bin/btt\" ingest --event Stop --data-dir \"${CLAUDE_PLUGIN_DATA}\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/bin/btt\" ingest --event Stop --data-dir \"${CLAUDE_PLUGIN_DATA}\"",
+            "timeout": 30
           }
         ]
       }
@@ -25,7 +27,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/bin/btt\" ingest --event SessionEnd --data-dir \"${CLAUDE_PLUGIN_DATA}\""
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/bin/btt\" ingest --event SessionEnd --data-dir \"${CLAUDE_PLUGIN_DATA}\"",
+            "timeout": 30
           }
         ]
       }

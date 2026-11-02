@@ -6,6 +6,10 @@ After any upgrade that changes how transcripts are parsed, run `btt backfill`.
 It re-derives turns from the transcripts still on disk, so spend an older parser
 could not see is recovered rather than lost.
 
+## 0.7.2
+
+- Every hook now times out after 30 seconds rather than the 600-second default.
+
 ## 0.7.1
 
 - A local command such as `/clear` no longer counts as a session's first
