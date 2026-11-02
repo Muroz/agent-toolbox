@@ -127,6 +127,23 @@ class SessionMeta:
 
 FIRST_PROMPT_CHARS = 200
 
+_CMD_NAME_RE = re.compile(r"<command-name>\s*([^<]*?)\s*</command-name>")
+_CMD_ARGS_RE = re.compile(r"<command-args>\s*([^<]*?)\s*</command-args>",
+                          re.S)
+
+
+def display_prompt(text: str) -> str:
+    """A prompt as the person typed it.
+
+    A slash command is recorded as `<command-name>/x</command-name>` wrapped in
+    message and args tags; show it as `/x args` instead.
+    """
+    name = _CMD_NAME_RE.search(text or "")
+    if not name:
+        return " ".join((text or "").split())
+    args = _CMD_ARGS_RE.search(text)
+    return " ".join(f"{name.group(1)} {args.group(1) if args else ''}".split())
+
 
 def _tool_result_chars(rec: dict) -> int:
     """Characters of tool output a `type=user` tool-result record feeds back.
@@ -504,6 +521,13 @@ def parse_session(path: str) -> tuple:
     def flush():
         if cur is not None and (cur._msgs or cur.total_tokens_agg):
             turns.append(cur)
+            # Taken here, not at the prompt: only a prompt the model answered
+            # is a turn. A local command such as `/clear` gets no response, so
+            # it starts no turn and must not stand in for what a session was.
+            if meta.first_prompt is None and cur.is_prompt and cur._msgs:
+                shown = display_prompt(cur.prompt_text)
+                if shown:
+                    meta.first_prompt = shown[:FIRST_PROMPT_CHARS]
 
     for rec in rows:
         rtype = rec.get("type")
@@ -534,8 +558,6 @@ def parse_session(path: str) -> tuple:
                 # that launched the agent. Its tokens were taken just above.
                 continue
             flush()
-            if meta.first_prompt is None and text.strip():
-                meta.first_prompt = text.strip()[:FIRST_PROMPT_CHARS]
             cur = Turn(
                 turn_id=rec.get("uuid") or f"turn-{len(turns)}",
                 seq=len(turns),

@@ -122,6 +122,35 @@ class TestTurnShape(unittest.TestCase):
         self.assertEqual(turns[0].cc_version, "2.1.316")
 
 
+class TestFirstPrompt(unittest.TestCase):
+    def setUp(self):
+        self.path = str(Path(tempfile.mkdtemp()) / "s.jsonl")
+
+    def test_a_local_command_is_not_the_first_prompt(self):
+        clear = ("<command-name>/clear</command-name>\n"
+                 "<command-message>clear</command-message>\n"
+                 "<command-args></command-args>")
+        _write(self.path, [
+            _prompt("p0", "2026-08-01T09:59:00Z", clear),   # no response
+            _prompt("p1", "2026-08-01T10:00:00Z", "review the PR"),
+            _reply("a1", "m1", "2026-08-01T10:00:05Z"),
+        ])
+        turns, meta = transcript.parse_session(self.path)
+        self.assertEqual(meta.first_prompt, "review the PR")
+        self.assertEqual([t.turn_id for t in turns], ["p1"])
+
+    def test_a_slash_command_that_ran_reads_as_typed(self):
+        cmd = ("<command-message>token-report</command-message>\n"
+               "<command-name>/token-report</command-name>\n"
+               "<command-args>PROJ-1 --by day</command-args>")
+        _write(self.path, [
+            _prompt("p1", "2026-08-01T10:00:00Z", cmd),
+            _reply("a1", "m1", "2026-08-01T10:00:05Z"),
+        ])
+        self.assertEqual(transcript.parse_session(self.path)[1].first_prompt,
+                         "/token-report PROJ-1 --by day")
+
+
 class TestRepoAndBilling(unittest.TestCase):
     def test_remote_forms_normalize_and_drop_credentials(self):
         for url, want in [
@@ -309,6 +338,13 @@ class TestPRsAndExports(_DB):
         out = report.render(rows, "json", ticket="P-1", window="", notes="",
                             project=None, meta=meta, include_text=True)
         self.assertEqual(json.loads(out)[0]["first_prompt"], "token=abc")
+
+    def test_an_untitled_session_falls_back_to_its_quoted_first_prompt(self):
+        self.conn.execute("UPDATE sessions SET title = NULL")
+        rows = report.for_ticket(self.conn, "P-1")
+        out = report.render(rows, "markdown", ticket="P-1", window="",
+                            notes="", project=None)
+        self.assertIn('| "token=abc" |', out)
 
     def test_on_screen_drilldown_shows_the_title(self):
         rows = report.for_ticket(self.conn, "P-1")

@@ -26,7 +26,8 @@ there is nothing to start or stop.
    - **spend per ticket over time** ("which tickets each day", "when did the PR land") →
      `--by day --split ticket`; the `PR events` column marks PR opens and merges
    - **what untracked work was** ("what's in unassigned") → `btt report unassigned`; the
-     `title` column is Claude Code's session title
+     `title` column is Claude Code's session title, or the first prompt in quotes for
+     sessions Claude Code doesn't title (Agent SDK runs, Claude Desktop)
    - **cost per shipped PR, review rounds, diff size** → run `btt enrich` first (needs a
      logged-in `gh`), then `btt report`; the `PRs` column and the `pr_*` export fields fill in
    - **"export"/"csv"/"json"/"for a spreadsheet"** → `--format csv` or `--format json`

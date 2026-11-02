@@ -537,7 +537,7 @@ def render_drilldown(ticket: str, rows: list, window: str, notes: str) -> str:
         ["session", "title", "branch", "repo", "turns", "output",
          "weighted", "est. USD", "models", "cost shape", "idle", "active",
          "started"],
-        [[(r["session_id"] or "—")[:8], _cell(r.get("title")),
+        [[(r["session_id"] or "—")[:8], _title(r),
           r["branch"] or "—", ", ".join(r["repos"]) or r["project"] or "—",
           _n(r["turns"]), _n(r["output_tokens"]), _n(r["weighted_tokens"]),
           _usd(r), r.get("models") or "—", _shape(r), _idle(r),
@@ -545,6 +545,20 @@ def render_drilldown(ticket: str, rows: list, window: str, notes: str) -> str:
     lead = (f"**{len(rows)} session(s) · {_n(weighted)} weighted tokens "
             f"({_n(total)} raw)** · branch(es): {', '.join(branches) or '—'}")
     return "\n".join([head, "", lead, "", body, "", _FOOTNOTE])
+
+
+def _title(r: dict) -> str:
+    """The session's title, or its first prompt in quotes when it has none.
+
+    Claude Code titles interactive sessions only; Agent SDK runs and Desktop
+    sessions have no title to read, and their first prompt is the next best
+    description. Quoted so it never passes for a title.
+    """
+    if r.get("title"):
+        return _cell(r["title"])
+    if r.get("first_prompt"):
+        return '"' + _cell(r["first_prompt"]) + '"'
+    return "—"
 
 
 def _cell(text) -> str:

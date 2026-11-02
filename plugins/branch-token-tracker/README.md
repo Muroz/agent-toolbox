@@ -275,8 +275,12 @@ Besides tokens, each ticket row shows:
 | `active` | Working time, with each idle gap capped at 5 minutes. |
 | `PRs` | Pull requests from the ticket's branches, how many merged and their lines added and removed. Filled by `btt enrich`. |
 
-A drilldown adds each session's title, which is the title Claude Code gave the
-session, and its repo. On `unassigned` that answers what the untracked spend was.
+A drilldown adds each session's title and repo. On `unassigned` that answers
+what the untracked spend was. The title is the one Claude Code gave the session.
+Claude Code titles interactive sessions only, so an Agent SDK run or a Claude
+Desktop session shows its first prompt instead, in quotes. A slash command shows
+as typed, `/name args`, and a local command such as `/clear` that got no
+response never counts as the first prompt.
 
 A dash means the figure was not recorded for those turns. Turns captured before
 version 0.7.0 have no cost shape or idle data, and `btt backfill` can fill them

@@ -191,7 +191,9 @@ def upsert_session(conn: sqlite3.Connection, session_id: str, meta, *,
                project      = COALESCE(excluded.project, project),
                repo         = COALESCE(excluded.repo, repo),
                title        = COALESCE(excluded.title, title),
-               first_prompt = COALESCE(first_prompt, excluded.first_prompt),
+               -- A re-parse reads the same transcript, so its value is the
+               -- current parser's answer; let it correct an older one.
+               first_prompt = COALESCE(excluded.first_prompt, first_prompt),
                cc_version   = COALESCE(excluded.cc_version, cc_version),
                entrypoint   = COALESCE(entrypoint, excluded.entrypoint),
                -- A stated value beats a guess, and a guess never overwrites

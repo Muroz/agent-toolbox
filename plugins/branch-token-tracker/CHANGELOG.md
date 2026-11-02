@@ -6,6 +6,16 @@ After any upgrade that changes how transcripts are parsed, run `btt backfill`.
 It re-derives turns from the transcripts still on disk, so spend an older parser
 could not see is recovered rather than lost.
 
+## 0.7.1
+
+- A local command such as `/clear` no longer counts as a session's first
+  prompt. Only a prompt the model answered does, and a slash command reads as
+  typed, `/name args`, rather than as its wrapper tags. Run `btt backfill` to
+  correct stored sessions.
+- A drilldown shows an untitled session's first prompt, in quotes, in place of
+  its title. Claude Code titles only interactive sessions, so Agent SDK runs and
+  Claude Desktop sessions used to show a dash.
+
 ## 0.7.0
 
 - Record why a turn cost what it did: model calls, peak and mean context per
