@@ -29,7 +29,9 @@ could not see is recovered rather than lost.
   `--include-text`.
 
 Run `btt backfill` after upgrading to fill the new fields for sessions whose
-transcripts are still on disk. Older turns read as unknown, not zero.
+transcripts are still on disk. Older turns read as unknown, not zero. The full
+steps, including the new config keys, are in
+[docs/upgrading-to-0.7.0.md](docs/upgrading-to-0.7.0.md).
 
 ## 0.6.2
 
