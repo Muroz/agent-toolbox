@@ -80,6 +80,7 @@ def rebuild_session(conn: sqlite3.Connection, session_id: str,
              t.cache_creation_tokens, t.cache_creation_1h_tokens,
              t.total_tokens_agg, t.active_ms, t.num_tool_calls,
              t.prompt_text, store.SOURCE))
+        store.write_turn_detail(conn, t)
         repaired += 1 if exists else 0
         added += 0 if exists else 1
     conn.commit()

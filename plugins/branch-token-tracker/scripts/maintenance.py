@@ -28,8 +28,10 @@ import argparse
 import glob
 import os
 import sqlite3
+from datetime import datetime, timezone
 
 import db
+import ingest
 import transcript
 
 PROJECTS_DIR = os.path.expanduser("~/.claude/projects")
@@ -96,7 +98,16 @@ def backfill(conn: sqlite3.Connection, verbose: bool = False) -> dict:
             "WHERE session_id = ?", (session_id,))}
         added = updated = 0
 
-        for t in transcript.parse_turns(path):
+        turns, meta = transcript.parse_session(path)
+        repo = ingest.current_repo(meta.cwd)
+        # Billing is left unknown: today's environment says nothing about the
+        # one the session ran under.
+        db.upsert_session(conn, session_id, meta,
+                          project=stored[0][3] if stored else None, repo=repo,
+                          billing=None, billing_source=None,
+                          now=datetime.now(timezone.utc).isoformat())
+
+        for t in turns:
             if t.turn_id in seen:
                 # Counts only ever grow: a turn captured mid-flight would
                 # otherwise keep a fraction of its real tokens forever.
@@ -136,6 +147,7 @@ def backfill(conn: sqlite3.Connection, verbose: bool = False) -> dict:
                     "FROM turns WHERE turn_id = ?", (t.turn_id,)).fetchone()
                 if tuple(before) != tuple(after):
                     updated += 1
+                db.write_turn_detail(conn, t, repo)
                 continue
 
             ticket, branch, project = _attribute(stored, t.started_at)
@@ -153,6 +165,7 @@ def backfill(conn: sqlite3.Connection, verbose: bool = False) -> dict:
                  t.cache_creation_1h_tokens, t.total_tokens_agg,
                  t.num_tool_calls, t.active_ms, t.query_source, t.agent_type,
                  1 if t.is_prompt else 0))
+            db.write_turn_detail(conn, t, repo)
             added += 1
 
         stats["added"] += added

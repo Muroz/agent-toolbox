@@ -23,8 +23,16 @@ there is nothing to start or stop.
    - **spend over time** ("per day", "how has it trended", "week by week") → `--by day`,
      `--by week` (Monday-start) or `--by month`. Combine with a ticket to get that ticket
      day by day, and with `--since`/`--until` to bound it.
+   - **spend per ticket over time** ("which tickets each day", "when did the PR land") →
+     `--by day --split ticket`; the `PR events` column marks PR opens and merges
+   - **what untracked work was** ("what's in unassigned") → `btt report unassigned`; the
+     `title` column is Claude Code's session title
+   - **cost per shipped PR, review rounds, diff size** → run `btt enrich` first (needs a
+     logged-in `gh`), then `btt report`; the `PRs` column and the `pr_*` export fields fill in
    - **"export"/"csv"/"json"/"for a spreadsheet"** → `--format csv` or `--format json`
-     (the `period` column comes through, so a time series exports directly)
+     (the `period` column comes through, so a time series exports directly). Exports leave
+     out session titles and prompts; add `--include-text` only when the user asks for them,
+     and tell them to read the file before sharing it
 
 2. Run it:
 
@@ -36,6 +44,8 @@ there is nothing to start or stop.
    btt report --by week                        # spend per week
    btt report PROJ-412 --by day                # one ticket, day by day
    btt report --project my-repo                # one repo only
+   btt report --by day --split ticket          # each ticket, day by day, with PR events
+   btt enrich && btt report                    # with PR outcomes from gh
    btt report --format csv > tokens.csv        # export
    ```
 
@@ -46,6 +56,11 @@ there is nothing to start or stop.
 3. Present the table as-is — it is already markdown. Add one line of interpretation: which
    ticket dominates, and whether cache-read (usually the bulk) or output tokens drive it.
    For a `--by` report, say what the trend is rather than restating the rows.
+
+   Read the cost-shape columns before blaming a ticket's size. High `calls/turn` means
+   many steps; high `ctx` per call means too much context; a large `rewritten` figure under
+   `idle` means gaps let the prompt cache expire. A dash means those turns predate the
+   data, not that the value is zero.
 
    Rank on **weighted** tokens, not the raw total: raw is about 95% cache reads, which bill at a
    tenth of input, so it ranks by session length rather than cost. Weighted includes subagent
@@ -74,6 +89,10 @@ for a global default):
 
 The plugin tries patterns in order, and the first match wins, using the `id` named group
 when present. `$BTT_PATTERN` overrides everything for a one-off run.
+
+The same file takes two more keys: `"person"` labels the user's rows in CSV and JSON exports
+(`$BTT_PERSON` overrides it), and `"billing": "api" | "subscription"` states how their
+sessions are billed, which otherwise is guessed from the environment.
 
 If the user's ids aren't being picked up, check the branch name against the pattern before
 assuming capture is broken — `btt report` shows what actually got extracted.

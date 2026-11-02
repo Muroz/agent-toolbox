@@ -6,6 +6,31 @@ After any upgrade that changes how transcripts are parsed, run `btt backfill`.
 It re-derives turns from the transcripts still on disk, so spend an older parser
 could not see is recovered rather than lost.
 
+## 0.7.0
+
+- Record why a turn cost what it did: model calls, peak and mean context per
+  call, the size of tool output fed back, gaps of over 5 minutes between calls
+  and the cache writes the call after each gap made. The ticket table shows
+  them as `cost shape` and `idle`, and shows `active` time.
+- Record each session's title, first prompt, repo (the `origin` remote, with any
+  credentials stripped), Claude Code version and billing mode in a new
+  `sessions` table. Drilldowns show the title and repo, so
+  `btt report unassigned` says what untracked work was.
+- Price every turn at its own model's rates. Opus 5.5 and Fable 5.1 read cache
+  at well under 0.1x input, so the old single-rate estimate overstated them.
+  Add the 5.5 and 5.1 models, and correct Sonnet 5 from $3 to $2 input. A `*`
+  marks a dollar figure that leaves out spend on an unpriced model. The report
+  shows each model's share in a `models` column.
+- Add `btt enrich`, which stores PR state, size, reviews and reopens per branch
+  from `gh`. The ticket table gains a `PRs` column.
+- Add `--split ticket` to `--by`, with PR open and merge markers.
+- CSV and JSON rows carry `person`, `btt_version`, `schema_version`, the
+  window and `generated_at`. Titles and prompts appear in them only with
+  `--include-text`.
+
+Run `btt backfill` after upgrading to fill the new fields for sessions whose
+transcripts are still on disk. Older turns read as unknown, not zero.
+
 ## 0.6.2
 
 - `btt report --by` now fills `active` from each turn's stored working time.

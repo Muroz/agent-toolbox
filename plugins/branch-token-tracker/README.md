@@ -11,13 +11,13 @@ no `/stop`, no rubric, no judge.
 $ btt report
 # Tokens by ticket
 
-**3 ticket(s) · 12,481,903 weighted tokens (66,035,157 raw)**
+**3 ticket(s) · 6,988,323 weighted tokens (49,481,875 raw)**
 
-| ticket | turns | sessions | input | output | cache read | cache create | weighted | est. USD | raw total | elapsed | last seen |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| PROJ-412 | 41 | 5 | 612 | 214,880 | 8,904,221 | 411,002 | 9,530,715 | $47.65 | 42,109,882 | 6h 12m | 2026-08-08T14:22 |
-| #883 | 12 | 2 | 98 | 61,004 | 2,401,880 | 96,441 | 2,559,423 | $12.79 | 18,441,004 | 1h 48m | 2026-08-07T18:05 |
-| unassigned | 4 | 1 | 22 | 18,330 | 361,003 | 12,410 | 391,765 | $1.95 | 5,484,271 | 22m 4s | 2026-08-05T09:11 |
+| ticket | turns | sessions | output | cache read | cache create | weighted | est. USD | models | cost shape | idle | active | PRs | last seen |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| PROJ-412 | 41 | 5 | 214,881 | 38,904,203 | 410,984 | 5,479,170 | $14.14 | opus-5-5 100% | 14.0 calls/turn · 121k ctx | 3 gaps · 402k rewritten | 5h 59m | 1 (1 merged) +412/-96 | 2026-08-08T14:22 |
+| #883 | 12 | 2 | 61,008 | 9,401,880 | 96,444 | 1,365,879 | $2.73 | sonnet-5-5 100% | 9.0 calls/turn · 88k ctx | none | 1h 48m | — | 2026-08-07T18:05 |
+| unassigned | 4 | 1 | 18,328 | 361,004 | 12,408 | 143,274 | $0.50 | opus-5-5 100% | 4.2 calls/turn · 27k ctx | 1 gap · 9k rewritten | 22m 0s | — | 2026-08-05T09:11 |
 ```
 
 ## Install
@@ -43,12 +43,12 @@ from a shell.
 
 ## How it works
 
-Three hooks, one table, no state machine.
+Three hooks, one summed table, no state machine.
 
 | Hook | What it does |
 | --- | --- |
 | `SessionStart` | Initializes the database and prints the current ticket's running total into session context. |
-| `Stop` | Resolves the branch, then inserts any turns not yet stored. |
+| `Stop` | Resolves the branch, then inserts any turns not yet stored and records the session's title, repo and billing mode. |
 | `SessionEnd` | Captures a final time, writes `current.json` and echoes a session summary. |
 
 The plugin resolves the branch at every `Stop`, not once per session. Switch
@@ -138,10 +138,9 @@ This file, not the echoed summary, is what makes the live total reachable:
 Claude Code does not surface `SessionEnd` hook stdout in the transcript. The
 `SessionStart` line is the part you see in-session.
 
-## Configuring the ticket pattern
+## Configuration
 
-Ticket extraction is the entire customization surface. The plugin looks for a
-config in this order and takes the first hit:
+The plugin looks for a config file in this order and takes the first hit:
 
 1. `$BTT_CONFIG`, an explicit file path
 2. `.branch-tokens.json`, walking up from the session's working directory
@@ -152,9 +151,36 @@ config in this order and takes the first hit:
 {
   "patterns": ["(?P<id>[A-Z][A-Z0-9]+-\\d+)", "(?P<id>#\\d+)"],
   "fallback": "unassigned",
-  "uppercase": true
+  "uppercase": true,
+  "person": "tester-a",
+  "billing": "subscription"
 }
 ```
+
+| Key | Default | What it does |
+| --- | --- | --- |
+| `patterns` | JIRA-style ids, then `#123` | Regexes that pull the ticket id out of a branch name. See [Ticket pattern](#ticket-pattern). |
+| `pattern` | none | A single regex; synonym for a one-element `patterns`. |
+| `fallback` | `unassigned` | The ticket for a branch no pattern matches. |
+| `uppercase` | `true` | Upper-case the extracted id. |
+| `person` | none | The name that labels your rows in CSV and JSON exports. See [Sharing an export](#sharing-an-export). |
+| `billing` | guessed | `api` or `subscription`. See [Billing mode](#billing-mode). |
+
+Environment variables override or supplement the file:
+
+| Variable | What it does |
+| --- | --- |
+| `BTT_CONFIG` | Path of the config file to use. |
+| `BTT_PATTERN` | One regex that beats every config file, for a one-off run. |
+| `BTT_PERSON` | Beats `person` from the config file. |
+| `BTT_DEBUG` | Set to `1` to print hook errors to stderr instead of swallowing them. |
+| `BTT_PYTHON` | Interpreter for `bin/btt` to use. |
+
+`btt report` reads the config from the directory you run it in, so a
+`person` set in a repo's `.branch-tokens.json` applies only there. Put it in
+`~/.claude/branch-tokens.json` to label every export.
+
+### Ticket pattern
 
 The plugin tries each pattern in order against the full branch name. The first
 match wins, taking the `id` named group when present and the whole match
@@ -233,9 +259,63 @@ BTT_PATTERN='(?P<id>CU-[0-9a-z]+)' btt report
 ```bash
 btt report                             # every ticket, biggest first
 btt report PROJ-412                    # the sessions and branches behind one ticket
+btt report unassigned                  # what the work off any ticket was
 btt report --project my-repo           # one repo only
 btt report --format csv > tokens.csv   # or --format json
 ```
+
+Besides tokens, each ticket row shows:
+
+| Column | What it says |
+| --- | --- |
+| `est. USD` | Every turn priced at its own model's rates. A `*` means part of the spend was on a model with no known price. |
+| `models` | Each model's share of the weighted tokens, for example `opus-5-5 70%, opus-5 30%`. |
+| `cost shape` | Model calls per turn and context tokens per call. Each call re-sends the whole context, so a costly turn is either many calls or a large context, and the fix differs. |
+| `idle` | Gaps of over 5 minutes between model calls, and the cache writes the next call made. A large figure means idle time is forcing the prompt cache to be rebuilt. |
+| `active` | Working time, with each idle gap capped at 5 minutes. |
+| `PRs` | Pull requests from the ticket's branches, how many merged and their lines added and removed. Filled by `btt enrich`. |
+
+A drilldown adds each session's title, which is the title Claude Code gave the
+session, and its repo. On `unassigned` that answers what the untracked spend was.
+
+A dash means the figure was not recorded for those turns. Turns captured before
+version 0.7.0 have no cost shape or idle data, and `btt backfill` can fill them
+in only while their transcripts are still on disk. Claude Code deletes
+transcripts after `cleanupPeriodDays`, 30 days by default.
+
+### Pull request outcomes
+
+```bash
+btt enrich                 # every recorded branch
+btt enrich --since 30d     # only branches worked on in the window
+```
+
+`enrich` asks the GitHub CLI for the pull requests opened from each recorded
+branch and stores their state, merge date, lines added and removed, review count,
+reviews that requested changes and reopens. It needs `gh` on `PATH` and logged
+in. Re-run it before each report you share: it refreshes every PR it finds.
+
+No hook runs it. It needs the network and takes a second or more per branch, and
+a hook must stay fast and offline. It skips `main`, `master`, `develop` and
+`trunk`, which carry everyone's PRs, and branches with no recorded repo.
+
+### Sharing an export
+
+CSV and JSON rows end with columns that say whose data they are and what they
+cover: `person`, `btt_version`, `schema_version`, `window_since`,
+`window_until` and `generated_at`. They repeat on every row, so exports from
+several people concatenate into one sheet and stay distinguishable. `person` is
+whatever you set in config or `$BTT_PERSON`, never your git identity:
+
+```json
+{ "person": "tester-a" }
+```
+
+Session titles and first prompts stay out of CSV and JSON unless you pass
+`--include-text`. They show on screen, but an export leaves your machine, and
+prompts can hold secrets or customer data.
+
+> **Warning:** read an `--include-text` export before you send it.
 
 ### Time ranges
 
@@ -273,6 +353,7 @@ time rather than a single total:
 btt report --by day                    # or week (Monday-start) | month
 btt report --by week --since 2026-08-01
 btt report PROJ-412 --by day           # one ticket's spend, day by day
+btt report --by day --split ticket     # one row per ticket per day
 ```
 
 ```
@@ -281,7 +362,7 @@ btt report PROJ-412 --by day           # one ticket's spend, day by day
 | day | turns | sessions | tickets | output | cache read | weighted | est. USD | raw total | active |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 2026-08-31 | 4 | 1 | 1 | 52,724 | 5,876,275 | 1,129,946 | $5.65 | 6,068,415 | 13m 27s |
-| 2026-09-01 | 22 | 4 | 3 | 258,130 | 50,643,629 | 8,352,460 | $41.76 | 51,987,333 | 1h 9m |
+| 2026-09-01 | 22 | 4 | 3 | 258,130 | 50,643,629 | 8,352,460 | $41.45 | 51,987,333 | 1h 9m |
 ```
 
 Without a ticket argument, each row also counts the distinct tickets worked that
@@ -294,9 +375,24 @@ caps each idle gap inside a turn at 5 minutes, so a turn left open overnight
 adds its real work rather than a day. Subagent time is left out, since it runs
 inside a main turn that already counts those minutes.
 
-The dollar figure prices each bucket on the model that produced most of its
-output, so a bucket that mixed models is an approximation. That is why the exact
-raw and weighted columns sit beside it.
+`--split ticket` gives one row per ticket per period instead, with a
+`PR events` column marking the periods a ticket's PR opened or merged. That
+lines spend up against delivery: how much went in before the PR opened, and how
+much after.
+
+### Billing mode
+
+Claude Code bills per token through an API account, or under a subscription,
+and the transcript does not say which. Each session records a `billing` value
+and where it came from:
+
+- **config:** `"billing": "api"` or `"billing": "subscription"` in the config
+  file. Stated, so it always wins.
+- **hint:** a guess from the hook's environment. `ANTHROPIC_API_KEY`,
+  `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX` or
+  `CLAUDE_CODE_USE_FOUNDRY` set means `api`, anything else `subscription`. A
+  subscriber with an API key exported for other tools reads as `api`, so set
+  the config value if that is you.
 
 ## Repairing an existing store
 
@@ -345,14 +441,15 @@ nothing of you. Install either, or both.
 branch-token-tracker/
 ├── .claude-plugin/plugin.json
 ├── hooks/hooks.json                 # SessionStart, Stop, SessionEnd
-├── bin/btt                          # launcher: ingest | report | backfill (on PATH)
+├── bin/btt                          # launcher: ingest | report | backfill | enrich (on PATH)
 ├── scripts/
 │   ├── db.py                        # data dir resolution + schema init
-│   ├── schema.sql                   # one table: turns
+│   ├── schema.sql                   # turns, plus sessions and prs
 │   ├── config.py                    # branch to ticket id
 │   ├── transcript.py                # turn + token-usage extraction
 │   ├── ingest.py                    # hook entrypoint
 │   ├── maintenance.py               # backfill: re-derive turns from transcripts
+│   ├── enrich.py                    # PR outcomes from gh
 │   └── report.py                    # markdown | csv | json
 ├── skills/token-report/SKILL.md     # /token-report
 └── tests/

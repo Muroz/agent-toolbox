@@ -18,6 +18,34 @@ import transcript as T
 SOURCE = "transcript"
 
 
+def write_turn_detail(conn, t) -> None:
+    """Store a parsed turn's cost-shape fields on its row.
+
+    Shared by capture and the backfill so the two cannot drift. Every field
+    here only grows as a turn does, so the latest parse wins; the mean follows
+    the parse that saw at least as many calls. A subagent known only from a
+    notification has no calls to count and keeps NULL, which reads as unknown.
+    """
+    if not t.api_calls:
+        return
+    conn.execute(
+        """UPDATE turns SET
+               cc_version = COALESCE(?, cc_version),
+               mean_context_tokens = CASE WHEN ? >= COALESCE(api_calls, 0)
+                                          THEN ? ELSE mean_context_tokens END,
+               api_calls           = MAX(COALESCE(api_calls, 0), ?),
+               peak_context_tokens = MAX(COALESCE(peak_context_tokens, 0), ?),
+               tool_result_chars   = MAX(COALESCE(tool_result_chars, 0), ?),
+               idle_gaps           = MAX(COALESCE(idle_gaps, 0), ?),
+               idle_ms             = MAX(COALESCE(idle_ms, 0), ?),
+               cold_cache_write_tokens =
+                   MAX(COALESCE(cold_cache_write_tokens, 0), ?)
+           WHERE turn_id = ?""",
+        (t.cc_version, t.api_calls, t.mean_context_tokens, t.api_calls,
+         t.peak_context_tokens, t.tool_result_chars, t.idle_gaps, t.idle_ms,
+         t.cold_cache_write_tokens, t.turn_id))
+
+
 def _has_split(t) -> int:
     """1 when this envelope carries a real per-class breakdown.
 
@@ -127,6 +155,7 @@ def capture_session_turns(
                  _has_split(t), t.total_tokens_agg, t.active_ms or 0, t.active_ms or 0,
                  t.num_tool_calls,
                  t.turn_id))
+            write_turn_detail(conn, t)
             continue
         conn.execute(
             """INSERT INTO turns
@@ -143,6 +172,7 @@ def capture_session_turns(
              t.total_tokens_agg, t.active_ms, t.num_tool_calls,
              t.prompt_text, SOURCE),
         )
+        write_turn_detail(conn, t)
         inserted += 1
     conn.commit()
     return inserted

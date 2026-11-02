@@ -95,9 +95,85 @@ class Turn:
     num_tool_calls: int = 0
     active_ms: int | None = None
     prompt_text: str = ""
+    # Why a turn cost what it did. Each model call re-sends the whole context,
+    # so cost grows with calls x context size; these separate the two.
+    api_calls: int = 0                # distinct `message.id`s: one per model call
+    peak_context_tokens: int = 0      # largest input + cache read + cache write
+    mean_context_tokens: int = 0      # the same, averaged over the turn's calls
+    tool_result_chars: int = 0        # text of tool results fed back to the model
+    # Idle time and what it cost. A call that follows a long gap may find its
+    # prompt cache expired and rewrite it; `cold_cache_write_tokens` is the
+    # cache write those calls actually made, so the cost is measured, not
+    # inferred from a TTL the transcript never states.
+    idle_gaps: int = 0                # gaps between model calls over IDLE_GAP_MS
+    idle_ms: int = 0                  # their full length, uncapped
+    cold_cache_write_tokens: int = 0
+    cc_version: str | None = None     # Claude Code version that wrote the turn
     _msgs: dict = field(default_factory=dict, repr=False)
     _stamps: list = field(default_factory=list, repr=False)
     _tools: set = field(default_factory=set, repr=False)
+    _cold: set = field(default_factory=set, repr=False)
+
+
+@dataclass
+class SessionMeta:
+    """Per-session facts the transcript carries once, not per turn."""
+    title: str | None = None          # Claude Code's own `aiTitle`, last wins
+    first_prompt: str | None = None   # first human prompt, truncated
+    cc_version: str | None = None
+    entrypoint: str | None = None     # cli | sdk | ide ...
+    cwd: str | None = None            # first working directory recorded
+
+
+FIRST_PROMPT_CHARS = 200
+
+
+def _tool_result_chars(rec: dict) -> int:
+    """Characters of tool output a `type=user` tool-result record feeds back.
+
+    Text only. An image block has no meaningful character length, so it counts
+    as 0 rather than as the size of its base64 payload.
+    """
+    content = (rec.get("message") or {}).get("content")
+    if not isinstance(content, list):
+        return 0
+    total = 0
+    for b in content:
+        if not isinstance(b, dict) or b.get("type") != "tool_result":
+            continue
+        c = b.get("content")
+        if isinstance(c, str):
+            total += len(c)
+        elif isinstance(c, list):
+            total += sum(len(x.get("text") or "") for x in c
+                         if isinstance(x, dict) and x.get("type") == "text")
+    return total
+
+
+class _CallClock:
+    """Tracks the last model call so each new call can see the gap before it.
+
+    One per transcript, carried across turn boundaries: the gap that matters
+    most is the one between a turn's last call and the next prompt's first,
+    which is where a user walking away lets the cache expire.
+    """
+    __slots__ = ("last_ts",)
+
+    def __init__(self):
+        self.last_ts = None
+
+    def note(self, turn: "Turn", rec: dict, mid: str | None) -> None:
+        ts = rec.get("timestamp")
+        if not ts:
+            return
+        if mid and mid not in turn._msgs and self.last_ts:
+            gap = duration_ms(self.last_ts, ts)
+            if gap is not None and gap > IDLE_GAP_MS:
+                turn.idle_gaps += 1
+                turn.idle_ms += gap
+                turn._cold.add(mid)
+        if self.last_ts is None or ts > self.last_ts:
+            self.last_ts = ts
 
 
 def parse_iso(ts: str | None) -> datetime | None:
@@ -378,13 +454,17 @@ def _agent_turn_from_log(main_path: str, agent_id: str, seq: int,
     turn = Turn(turn_id=f"agent:{agent_id}", seq=seq, query_source="subagent",
                 is_prompt=False,
                 agent_type=_subagent_meta(log).get("agentType"))
+    clock = _CallClock()
     for rec in _load(log):
         ts = rec.get("timestamp")
         if ts:
             turn._stamps.append(ts)
         if rec.get("type") != "assistant":
+            if "toolUseResult" in rec:
+                turn.tool_result_chars += _tool_result_chars(rec)
             continue
         mid = (rec.get("message") or {}).get("id") or rec.get("uuid")
+        clock.note(turn, rec, mid)
         if mid:
             turn._msgs[mid] = rec
         _collect_tools(turn, rec)
@@ -396,7 +476,14 @@ def _agent_turn_from_log(main_path: str, agent_id: str, seq: int,
 
 
 def parse_turns(path: str, include_sidechain: bool = False) -> list[Turn]:
-    """Parse a transcript into main turns plus one row per subagent invocation.
+    """The turns of a transcript; see `parse_session`."""
+    return parse_session(path)[0]
+
+
+def parse_session(path: str) -> tuple:
+    """Parse a transcript into (turns, SessionMeta).
+
+    Turns are the main turns plus one row per subagent invocation.
 
     Main turns keep only the main thread's own tokens; each subagent gets its own
     row keyed on its agent id, so subagent spend is attributed without being
@@ -407,6 +494,8 @@ def parse_turns(path: str, include_sidechain: bool = False) -> list[Turn]:
     subagent's own log, which is read separately — see `_agent_turn_from_log`.
     """
     rows = _load(path)
+    meta = SessionMeta()
+    clock = _CallClock()
     turns: list[Turn] = []
     ranks: dict = {}
     agents: dict[str, Turn] = {}
@@ -418,6 +507,16 @@ def parse_turns(path: str, include_sidechain: bool = False) -> list[Turn]:
 
     for rec in rows:
         rtype = rec.get("type")
+
+        if rtype == "ai-title" and isinstance(rec.get("aiTitle"), str):
+            meta.title = rec["aiTitle"][:FIRST_PROMPT_CHARS]
+            continue
+        if rec.get("version"):
+            meta.cc_version = str(rec["version"])
+        if rec.get("entrypoint") and not meta.entrypoint:
+            meta.entrypoint = str(rec["entrypoint"])
+        if rec.get("cwd") and not meta.cwd:
+            meta.cwd = str(rec["cwd"])
 
         # Scan EVERY record for a task-notification, not just `type=user` ones:
         # a backgrounded agent reports on whichever of three channels it happens
@@ -435,6 +534,8 @@ def parse_turns(path: str, include_sidechain: bool = False) -> list[Turn]:
                 # that launched the agent. Its tokens were taken just above.
                 continue
             flush()
+            if meta.first_prompt is None and text.strip():
+                meta.first_prompt = text.strip()[:FIRST_PROMPT_CHARS]
             cur = Turn(
                 turn_id=rec.get("uuid") or f"turn-{len(turns)}",
                 seq=len(turns),
@@ -457,11 +558,16 @@ def parse_turns(path: str, include_sidechain: bool = False) -> list[Turn]:
                     is_prompt=False,
                 )
             mid = (rec.get("message") or {}).get("id") or rec.get("uuid")
+            clock.note(cur, rec, mid)
             if mid:
                 cur._msgs[mid] = rec
             _collect_tools(cur, rec)
             if rec.get("timestamp"):
                 cur._stamps.append(rec["timestamp"])
+            if rec.get("version"):
+                cur.cc_version = str(rec["version"])
+        elif cur is not None and rtype == "user" and "toolUseResult" in rec:
+            cur.tool_result_chars += _tool_result_chars(rec)
 
         tur = rec.get("toolUseResult")
         if isinstance(tur, dict) and tur.get("agentId"):
@@ -491,16 +597,25 @@ def parse_turns(path: str, include_sidechain: bool = False) -> list[Turn]:
 
     for turn in turns:
         _finalize(turn)
-    return turns + list(agents.values())
+    return turns + list(agents.values()), meta
 
 
 def _finalize(turn: Turn) -> None:
     last_ts = None
     last_model = None
     last_effort = None
-    for rec in turn._msgs.values():
+    ctx_sum = 0
+    for mid, rec in turn._msgs.items():
         msg = rec.get("message") or {}
         usage = msg.get("usage") or {}
+        ctx = (int(usage.get("input_tokens") or 0)
+               + int(usage.get("cache_read_input_tokens") or 0)
+               + int(usage.get("cache_creation_input_tokens") or 0))
+        ctx_sum += ctx
+        turn.peak_context_tokens = max(turn.peak_context_tokens, ctx)
+        if mid in turn._cold:
+            turn.cold_cache_write_tokens += int(
+                usage.get("cache_creation_input_tokens") or 0)
         turn.input_tokens += int(usage.get("input_tokens") or 0)
         turn.output_tokens += int(usage.get("output_tokens") or 0)
         turn.cache_read_tokens += int(usage.get("cache_read_input_tokens") or 0)
@@ -516,6 +631,8 @@ def _finalize(turn: Turn) -> None:
         if rec.get("effort"):
             last_effort = rec["effort"]
     turn.num_tool_calls += len(turn._tools)
+    turn.api_calls = len(turn._msgs)
+    turn.mean_context_tokens = round(ctx_sum / turn.api_calls) if turn.api_calls else 0
     turn.ended_at = last_ts
     turn.model = last_model
     turn.effort = last_effort

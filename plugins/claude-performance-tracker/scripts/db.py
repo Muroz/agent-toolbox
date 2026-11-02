@@ -90,7 +90,7 @@ def connect(explicit_dir: str | None = None) -> sqlite3.Connection:
     return conn
 
 
-SCHEMA_VERSION = "4"
+SCHEMA_VERSION = "5"
 
 # Columns added after a database may already have been created. `CREATE TABLE IF
 # NOT EXISTS` is a no-op on an existing table, so without this list an upgrade
@@ -106,6 +106,15 @@ ADDED_COLUMNS = (
     ("runs", "total_tokens_agg", "INTEGER DEFAULT 0"),
     ("runs", "active_ms", "INTEGER"),
     ("runs", "peak_context_tokens", "INTEGER"),
+    # Schema 5. No defaults: NULL marks a turn captured before these existed.
+    ("turns", "cc_version", "TEXT"),
+    ("turns", "api_calls", "INTEGER"),
+    ("turns", "peak_context_tokens", "INTEGER"),
+    ("turns", "mean_context_tokens", "INTEGER"),
+    ("turns", "tool_result_chars", "INTEGER"),
+    ("turns", "idle_gaps", "INTEGER"),
+    ("turns", "idle_ms", "INTEGER"),
+    ("turns", "cold_cache_write_tokens", "INTEGER"),
 )
 
 # Tables superseded by a later design that must not be left behind holding data

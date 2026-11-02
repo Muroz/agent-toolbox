@@ -114,6 +114,17 @@ CREATE TABLE IF NOT EXISTS turns (
     agent_type      TEXT,           -- subagent_type, for subagent rows
 
     prompt_text     TEXT,           -- retained for prompt-quality scoring
+
+    -- Why a turn cost what it did (see transcript.py). NULL on rows captured
+    -- before these existed: unknown, which is not the same as zero.
+    cc_version          TEXT,
+    api_calls           INTEGER,    -- model calls (distinct message ids)
+    peak_context_tokens INTEGER,    -- largest input + cache read + cache write
+    mean_context_tokens INTEGER,
+    tool_result_chars   INTEGER,    -- tool output text fed back to the model
+    idle_gaps           INTEGER,    -- gaps between model calls over 5 minutes
+    idle_ms             INTEGER,    -- their full, uncapped length
+    cold_cache_write_tokens INTEGER, -- cache writes by the call after each gap
     source          TEXT NOT NULL DEFAULT 'transcript'
 );
 

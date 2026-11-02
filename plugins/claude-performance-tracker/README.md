@@ -174,7 +174,8 @@ Every ranking therefore uses weighted tokens, the input-equivalent units in
 `scripts/cost.py`. The 5x output multiplier holds for every current model, so
 weighted tokens are comparable across models. Converting to dollars needs the
 per-model input price, and models absent from the table report `—` rather than a
-guess.
+guess. The dollar figure prices cache reads at 0.1x input, which overstates
+models that read cache for less: Opus 5.5 at 0.05x and Fable 5.1 at 0.025x.
 
 Time is reported two ways for the same reason. `active_ms` sums each turn's span
 with individual idle gaps capped at 5 minutes, and is what the rankings use.
@@ -249,6 +250,13 @@ setting is harmless when pyenv is not installed.
   than adding to it, since it measures the same spend more precisely.
 - `effort` is read from the top level of each assistant record, so
   `--by effort` works.
+- Each turn also records why it cost what it did: `api_calls` (distinct
+  `message.id`s), `peak_context_tokens` and `mean_context_tokens` (input plus
+  cache read plus cache write per call), `tool_result_chars` (tool output text
+  fed back), `idle_gaps` and `idle_ms` (gaps of over 5 minutes between calls,
+  including the one before a turn's first call) and `cold_cache_write_tokens`
+  (the cache writes made by the call after each gap). Turns captured before
+  these existed hold NULL, meaning unknown.
 
 ### Attribution is pinned, the envelope is not
 
@@ -431,7 +439,7 @@ One SQLite database at `${CLAUDE_PLUGIN_DATA}/usage.db`, which is
 | Table | Purpose |
 |-------|---------|
 | `runs` | One row per run, the scorecard: tags, approach, signal summary, output, friction, context, outcome. |
-| `turns` | One row per turn, carrying both `session_id` and `run_id`, so a run can span sessions, plus `query_source` of `main` or `subagent`. |
+| `turns` | One row per turn, carrying both `session_id` and `run_id`, so a run can span sessions, plus `query_source` of `main` or `subagent` and the turn's cost shape: model calls, context size, tool output and idle gaps. |
 | `scores` | Long-form EAV qualitative scores for runs and prompts, stamped with `rubric_version`. |
 | `judge_verdicts` | One row per judge pass, the provenance for the scores. |
 | `sessions` | Maps `session_id` to `run_id`, plus the transcript path, which keeps `run_id` session-independent. |

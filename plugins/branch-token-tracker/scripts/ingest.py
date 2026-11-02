@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import traceback
@@ -87,6 +88,66 @@ def current_branch(cwd: str | None) -> str | None:
     return None if not branch or branch == "HEAD" else branch
 
 
+_SCP_RE = re.compile(r"^[\w.-]+@([^:/]+):(.+)$")   # git@github.com:o/r.git
+
+
+def normalize_remote(url: str | None) -> str | None:
+    """`host/owner/name` for a git remote URL, with any credentials dropped.
+
+    HTTPS remotes can embed a token (`https://x:ghp_...@github.com/o/r`). The
+    repo name is exported to whoever reads the report, so the userinfo part is
+    removed rather than stored and redacted later.
+    """
+    if not url:
+        return None
+    u = url.strip()
+    m = _SCP_RE.match(u)
+    if m:
+        host, path = m.group(1), m.group(2)
+    else:
+        u = re.sub(r"^[a-z+]+://", "", u)
+        u = u.rsplit("@", 1)[-1] if "@" in u.split("/", 1)[0] else u
+        host, _, path = u.partition("/")
+        host = host.split(":", 1)[0]          # drop a port
+    path = path.strip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    return f"{host}/{path}" if host and path else None
+
+
+def current_repo(cwd: str | None) -> str | None:
+    """The normalized `origin` remote, or None outside a repo or without one."""
+    if not cwd or not os.path.isdir(cwd):
+        return None
+    try:
+        p = subprocess.run(
+            ["git", "-C", cwd, "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if p.returncode != 0:
+        return None
+    return normalize_remote(p.stdout)
+
+
+# Any of these in the hook's environment means Claude Code bills per token
+# through an API account rather than a subscription. It is a hint: a subscriber
+# can have an API key exported for other tools, which is why a stated config
+# value always wins and the source is stored beside the value.
+API_BILLING_ENV = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK",
+                   "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY")
+
+
+def billing_mode(cfg: dict) -> tuple:
+    """(billing, source) — from config when stated, else a guess from the env."""
+    stated = cfg.get("billing")
+    if stated in ("api", "subscription"):
+        return stated, "config"
+    if any(os.environ.get(k) for k in API_BILLING_ENV):
+        return "api", "hint"
+    return "subscription", "hint"
+
+
 def _has_split(t) -> int:
     """1 when this envelope carries a real per-class breakdown.
 
@@ -99,7 +160,8 @@ def _has_split(t) -> int:
 
 
 def capture(conn, session_id: str, transcript_path: str, *, project: str | None,
-            branch: str | None, ticket: str) -> int:
+            branch: str | None, ticket: str, repo: str | None = None,
+            billing: tuple = (None, None)) -> int:
     """Insert turns not already stored. Returns the number written.
 
     Insert-only by `turn_id`, so re-reading the whole transcript after every
@@ -109,7 +171,11 @@ def capture(conn, session_id: str, transcript_path: str, *, project: str | None,
         return 0
     seen = {r[0] for r in conn.execute("SELECT turn_id FROM turns")}
     written = 0
-    for t in transcript.parse_turns(transcript_path):
+    turns, meta = transcript.parse_session(transcript_path)
+    db.upsert_session(conn, session_id, meta, project=project, repo=repo,
+                      billing=billing[0], billing_source=billing[1],
+                      now=datetime.now(timezone.utc).isoformat())
+    for t in turns:
         if t.turn_id in seen:
             # The ticket attribution stays pinned to the branch the turn first
             # ran on, but the envelope is refreshed: a turn captured while the
@@ -142,6 +208,7 @@ def capture(conn, session_id: str, transcript_path: str, *, project: str | None,
                  t.output_tokens, t.cache_read_tokens, t.cache_creation_tokens,
                  t.cache_creation_1h_tokens, _has_split(t), t.total_tokens_agg,
                  t.active_ms or 0, t.active_ms or 0, t.num_tool_calls, t.turn_id))
+            db.write_turn_detail(conn, t, repo)
             continue
         conn.execute(
             """INSERT INTO turns
@@ -157,6 +224,7 @@ def capture(conn, session_id: str, transcript_path: str, *, project: str | None,
              t.cache_creation_1h_tokens, t.total_tokens_agg, t.num_tool_calls,
              t.active_ms, t.query_source, t.agent_type,
              1 if t.is_prompt else 0))
+        db.write_turn_detail(conn, t, repo)
         written += 1
     conn.commit()
     return written
@@ -192,6 +260,22 @@ def write_current(data_dir, payload: dict) -> None:
         pass
 
 
+def _session_repo(conn, session_id: str, cwd: str | None) -> str | None:
+    """The session's repo, asking git only the first time.
+
+    A failed lookup is not fatal: the turn is still captured, just without a
+    repo, and the next Stop tries again.
+    """
+    try:
+        row = conn.execute("SELECT repo FROM sessions WHERE session_id = ?",
+                           (session_id,)).fetchone()
+    except Exception:  # noqa: BLE001 — an old store without the table
+        row = None
+    if row and row[0]:
+        return row[0]
+    return current_repo(cwd)
+
+
 def run(event: str, data_dir: str | None) -> None:
     payload = _payload()
     session_id = payload.get("session_id") or "unknown"
@@ -199,14 +283,17 @@ def run(event: str, data_dir: str | None) -> None:
     transcript_path = payload.get("transcript_path") or ""
     project = _project(cwd)
     branch = current_branch(cwd)
-    ticket = config.ticket_for(branch, cwd=cwd)
+    cfg = config.load(cwd)
+    ticket = config.ticket_for(branch, cfg)
 
     db.init_db(data_dir)
     conn = db.connect(data_dir)
     try:
         if event != "SessionStart":
             capture(conn, session_id, transcript_path, project=project,
-                    branch=branch, ticket=ticket)
+                    branch=branch, ticket=ticket,
+                    repo=_session_repo(conn, session_id, cwd),
+                    billing=billing_mode(cfg))
 
         totals = _totals(conn, "ticket = ?", (ticket,))
         sessions = conn.execute(

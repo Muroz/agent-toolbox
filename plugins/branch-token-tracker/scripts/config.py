@@ -1,7 +1,9 @@
 """Branch name -> task-tracker id, and the config that governs it.
 
-The whole customization surface of this plugin is here. Everything else takes a
-ticket string and counts tokens against it.
+Every setting this plugin reads lives in this file's config. Most of it decides
+the ticket; everything else takes a ticket string and counts tokens against it.
+Two keys do not: `person` labels exported rows (report.py) and `billing` states
+whether the sessions run on an API account or a subscription (ingest.py).
 
 Config lookup, first hit wins:
 
@@ -16,7 +18,9 @@ above — that is the one-off escape hatch, not the thing to configure per repo.
     {
       "patterns": ["(?P<id>[A-Z][A-Z0-9]+-\\\\d+)", "(?P<id>#\\\\d+)"],
       "fallback": "unassigned",
-      "uppercase": true
+      "uppercase": true,
+      "person": "tester-a",
+      "billing": "subscription"
     }
 
 Patterns are tried in order against the full branch name; the first that matches

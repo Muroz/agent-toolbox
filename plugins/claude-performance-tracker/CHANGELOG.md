@@ -8,6 +8,16 @@ envelopes, dropping rows the parser no longer produces, relabeling mislabeled
 subagent rows and recomputing each affected run's aggregates, signals and
 inferred outcome.
 
+## 0.8.0
+
+- Store per turn the model calls, peak and mean context per call, tool output
+  size, gaps of over 5 minutes between calls, the cache writes after each gap
+  and the Claude Code version. Turns captured earlier hold NULL; `cpt backfill`
+  fills them while their transcripts exist.
+- Add prices for the 5.5 and 5.1 models and correct Sonnet 5 from $3 to $2
+  input. Dollar estimates here still price cache reads at 0.1x input, which
+  overstates Opus 5.5 and Fable 5.1; branch-token-tracker prices per class.
+
 ## 0.7.1
 
 - Count every `tool_use` block rather than one per message.

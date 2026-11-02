@@ -88,7 +88,7 @@ def connect(explicit_dir: str | None = None) -> sqlite3.Connection:
     return conn
 
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 # Columns added after a database may already exist. `CREATE TABLE IF NOT EXISTS`
 # is a no-op on an existing table, so without this an upgrade silently keeps the
@@ -101,6 +101,17 @@ ADDED_COLUMNS = (
     ("turns", "query_source", "TEXT NOT NULL DEFAULT 'main'"),
     ("turns", "agent_type", "TEXT"),
     ("turns", "is_prompt", "INTEGER NOT NULL DEFAULT 1"),
+    # Schema 3. No defaults: on a row captured before these existed the value
+    # is unknown, and a report must say so rather than show a zero.
+    ("turns", "repo", "TEXT"),
+    ("turns", "cc_version", "TEXT"),
+    ("turns", "api_calls", "INTEGER"),
+    ("turns", "peak_context_tokens", "INTEGER"),
+    ("turns", "mean_context_tokens", "INTEGER"),
+    ("turns", "tool_result_chars", "INTEGER"),
+    ("turns", "idle_gaps", "INTEGER"),
+    ("turns", "idle_ms", "INTEGER"),
+    ("turns", "cold_cache_write_tokens", "INTEGER"),
 )
 
 
@@ -128,6 +139,76 @@ def _migrate(conn: sqlite3.Connection) -> list:
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (SCHEMA_VERSION,))
     conn.commit()
     return applied
+
+
+def write_turn_detail(conn: sqlite3.Connection, t, repo: str | None) -> None:
+    """Store a parsed turn's cost-shape fields on its row.
+
+    Shared by the hook capture and `btt backfill`, so the two can never disagree
+    about what these columns mean. A turn captured mid-flight is re-parsed on
+    the next Stop, and every field here only grows as the turn does, so the
+    latest parse is the most complete one. The exception is the mean, which
+    moves either way; it follows the parse that saw at least as many calls.
+
+    A subagent known only from a notification or a tool result has no calls to
+    count. Its row keeps NULL, which reads as unknown rather than zero.
+    """
+    if not t.api_calls:
+        if repo:
+            conn.execute("UPDATE turns SET repo = COALESCE(repo, ?) "
+                         "WHERE turn_id = ?", (repo, t.turn_id))
+        return
+    conn.execute(
+        """UPDATE turns SET
+               repo       = COALESCE(repo, ?),
+               cc_version = COALESCE(?, cc_version),
+               mean_context_tokens = CASE WHEN ? >= COALESCE(api_calls, 0)
+                                          THEN ? ELSE mean_context_tokens END,
+               api_calls           = MAX(COALESCE(api_calls, 0), ?),
+               peak_context_tokens = MAX(COALESCE(peak_context_tokens, 0), ?),
+               tool_result_chars   = MAX(COALESCE(tool_result_chars, 0), ?),
+               idle_gaps           = MAX(COALESCE(idle_gaps, 0), ?),
+               idle_ms             = MAX(COALESCE(idle_ms, 0), ?),
+               cold_cache_write_tokens =
+                   MAX(COALESCE(cold_cache_write_tokens, 0), ?)
+           WHERE turn_id = ?""",
+        (repo, t.cc_version, t.api_calls, t.mean_context_tokens, t.api_calls,
+         t.peak_context_tokens, t.tool_result_chars, t.idle_gaps, t.idle_ms,
+         t.cold_cache_write_tokens, t.turn_id))
+
+
+def upsert_session(conn: sqlite3.Connection, session_id: str, meta, *,
+                   project: str | None, repo: str | None,
+                   billing: str | None, billing_source: str | None,
+                   now: str) -> None:
+    """Record a session's one-off facts. Later non-null values win."""
+    conn.execute(
+        """INSERT INTO sessions (session_id, project, repo, title, first_prompt,
+                                 cc_version, entrypoint, billing, billing_source,
+                                 updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(session_id) DO UPDATE SET
+               project      = COALESCE(excluded.project, project),
+               repo         = COALESCE(excluded.repo, repo),
+               title        = COALESCE(excluded.title, title),
+               first_prompt = COALESCE(first_prompt, excluded.first_prompt),
+               cc_version   = COALESCE(excluded.cc_version, cc_version),
+               entrypoint   = COALESCE(entrypoint, excluded.entrypoint),
+               -- A stated value beats a guess, and a guess never overwrites
+               -- a stated value.
+               billing = CASE WHEN billing_source = 'config'
+                                   AND excluded.billing_source <> 'config'
+                              THEN billing
+                              ELSE COALESCE(excluded.billing, billing) END,
+               billing_source = CASE WHEN billing_source = 'config'
+                                          AND excluded.billing_source <> 'config'
+                                     THEN billing_source
+                                     ELSE COALESCE(excluded.billing_source,
+                                                   billing_source) END,
+               updated_at   = excluded.updated_at""",
+        (session_id, project, repo, getattr(meta, "title", None),
+         getattr(meta, "first_prompt", None), getattr(meta, "cc_version", None),
+         getattr(meta, "entrypoint", None), billing, billing_source, now))
 
 
 def init_db(explicit_dir: str | None = None) -> list:
