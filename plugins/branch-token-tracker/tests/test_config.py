@@ -150,5 +150,20 @@ class TestDegradesRatherThanRaises(_EnvSandbox):
         self.assertEqual(config.load(str(proj))["fallback"], "unassigned")
 
 
+    def test_ticket_command_applies_the_env_pattern(self):
+        import contextlib
+        import io
+        import os
+        from unittest import mock
+        buf = io.StringIO()
+        with mock.patch.dict(os.environ,
+                             {"BTT_PATTERN": "(?P<id>CU-[0-9a-z]+)"}), \
+                contextlib.redirect_stdout(buf):
+            config.main(["x-CU-86e31q7e3", "main"])
+        self.assertEqual(buf.getvalue().splitlines(),
+                         ["x-CU-86e31q7e3 -> CU-86E31Q7E3",
+                          "main -> unassigned"])
+
+
 if __name__ == "__main__":
     unittest.main()

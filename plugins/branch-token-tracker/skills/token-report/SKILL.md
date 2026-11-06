@@ -28,6 +28,13 @@ there is nothing to start or stop.
    - **what untracked work was** ("what's in unassigned") → `btt report unassigned`; the
      `title` column is Claude Code's session title, or the first prompt in quotes for
      sessions Claude Code doesn't title (Agent SDK runs, Claude Desktop)
+   - **untracked work broken out among the tickets** ("show unassigned by session",
+     "split unassigned") → `--unassigned sessions`: each unassigned session becomes its own
+     row, named by its title, ranked with the tickets. Works with `--by ... --split ticket`
+   - **delete untracked work** ("purge unassigned") → do NOT run it yourself with `--yes`.
+     Run `btt purge-unassigned` (a dry run that prints counts), show the user, and tell them
+     `btt purge-unassigned --yes` deletes it after writing a backup; it cannot be undone
+     from transcripts
    - **cost per shipped PR, review rounds, diff size** → run `btt enrich` first (needs a
      logged-in `gh`), then `btt report`; the `PRs` column and the `pr_*` export fields fill in
    - **"export"/"csv"/"json"/"for a spreadsheet"** → `--format csv` or `--format json`
@@ -46,6 +53,7 @@ there is nothing to start or stop.
    btt report PROJ-412 --by day                # one ticket, day by day
    btt report --project my-repo                # one repo only
    btt report --by day --split ticket          # each ticket, day by day, with PR events
+   btt report --unassigned sessions            # unassigned split into its sessions
    btt enrich && btt report                    # with PR outcomes from gh
    btt report --format csv > tokens.csv        # export
    ```
@@ -96,7 +104,8 @@ The same file takes two more keys: `"person"` labels the user's rows in CSV and 
 sessions are billed, which otherwise is guessed from the environment.
 
 If the user's ids aren't being picked up, check the branch name against the pattern before
-assuming capture is broken — `btt report` shows what actually got extracted.
+assuming capture is broken: `btt ticket <branch>` prints the ticket that branch files under,
+and `BTT_PATTERN='<regex>' btt ticket <branch>` tries a new pattern.
 
 ## Fallback if `btt` is not on PATH
 

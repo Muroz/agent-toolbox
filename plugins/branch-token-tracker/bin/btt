@@ -35,6 +35,8 @@ case "$sub" in
   ingest) "$py" "$scripts/ingest.py" "$@" || true; exit 0 ;;
   report) exec "$py" "$scripts/report.py" "$@" ;;
   backfill) exec "$py" "$scripts/maintenance.py" backfill "$@" ;;
+  purge-unassigned) exec "$py" "$scripts/maintenance.py" purge-unassigned "$@" ;;
   enrich) exec "$py" "$scripts/enrich.py" "$@" ;;
-  *) echo "usage: btt {ingest|report|backfill|enrich} ..." >&2; exit 2 ;;
+  ticket) exec "$py" "$scripts/config.py" "$@" ;;
+  *) echo "usage: btt {ingest|report|backfill|purge-unassigned|enrich|ticket} ..." >&2; exit 2 ;;
 esac

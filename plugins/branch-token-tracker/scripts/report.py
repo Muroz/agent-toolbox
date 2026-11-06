@@ -280,26 +280,69 @@ def _pr_fields(prs: list) -> dict:
             "pr_reopens": total("reopens")}
 
 
+# How `--unassigned` shows the fallback bucket: one row, or one per session.
+UNASSIGNED_MODES = ("bucket", "sessions")
+
+
+def _session_key(fallback: str | None) -> tuple:
+    """SQL for a column that splits the fallback ticket by session.
+
+    It is NULL on every other ticket, so grouping on (ticket, this) leaves real
+    tickets as one row each. With no fallback given it is always NULL.
+    """
+    if not fallback:
+        return "NULL", ()
+    return "CASE WHEN ticket = ? THEN session_id END", (fallback,)
+
+
+def _with_session_facts(conn, d: dict, session_id: str | None) -> dict:
+    """Give every row the same session columns, so a CSV header covers them.
+
+    A real ticket spans sessions and gets NULLs; a split-out session gets its
+    title and first prompt. Exports drop both unless `--include-text`.
+    """
+    facts = (_session_facts(conn, session_id) if session_id
+             else {"title": None, "first_prompt": None})
+    d["session_id"] = session_id
+    d["title"] = facts["title"]
+    d["first_prompt"] = facts["first_prompt"]
+    return d
+
+
 def by_ticket(conn, since: str | None = None, until: str | None = None,
-              project: str | None = None) -> list:
+              project: str | None = None,
+              split_fallback: str | None = None) -> list:
+    """One row per ticket, ranked by weighted tokens.
+
+    `split_fallback` names the fallback ticket (`unassigned` by default) to show
+    as one row per session instead of one lump, so untracked work can be told
+    apart by its session title.
+    """
     where, params = _filters(since, until, project)
+    skey, sparams = _session_key(split_fallback)
     rows = conn.execute(
-        f"""SELECT ticket, GROUP_CONCAT(DISTINCT branch) AS branches,
+        f"""SELECT ticket, {skey} AS split_session,
+                   GROUP_CONCAT(DISTINCT branch) AS branches,
                    (SELECT model FROM turns m WHERE m.ticket = turns.ticket
                      AND m.model IS NOT NULL
                      GROUP BY m.model ORDER BY SUM(m.output_tokens) DESC
                      LIMIT 1) AS model,
                    {_SUMS}
             FROM turns WHERE {where}
-            GROUP BY ticket""", params).fetchall()
+            GROUP BY ticket, split_session""", sparams + params).fetchall()
     mix = _model_mix(conn, "ticket", where, params)
+    smix = (_model_mix(conn, "session_id", f"{where} AND ticket = ?",
+                       params + (split_fallback,)) if split_fallback else {})
     out = []
     for r in rows:
         branches = (sorted((r["branches"] or "").split(","))
                     if r["branches"] else [])
         d = _row(r, ticket=r["ticket"], model=r["model"], branches=branches)
-        d["models"] = mix.get(r["ticket"], "")
+        sid = r["split_session"]
+        d["models"] = smix.get(sid, "") if sid else mix.get(r["ticket"], "")
         d.update(_pr_fields(_prs_for(conn, branches)))
+        if split_fallback:
+            _with_session_facts(conn, d, sid)
         out.append(d)
     # Ranked on weighted (input-equivalent) tokens: a raw sum is ~95% cache
     # reads, which bill at a tenth of input, so it ranks tickets by how long
@@ -343,7 +386,8 @@ def for_ticket(conn, ticket: str, since: str | None = None,
 
 def by_period(conn, period: str, since: str | None = None,
               until: str | None = None, project: str | None = None,
-              ticket: str | None = None, split: bool = False) -> list:
+              ticket: str | None = None, split: bool = False,
+              split_fallback: str | None = None) -> list:
     """Spend per local calendar bucket, optionally for a single ticket.
 
     `split` gives one row per (bucket, ticket) instead of one per bucket, with
@@ -356,7 +400,8 @@ def by_period(conn, period: str, since: str | None = None,
         where += " AND ticket = ?"
         params = params + (ticket,)
     if split:
-        return _by_period_split(conn, period, bucket, where, params)
+        return _by_period_split(conn, period, bucket, where, params,
+                                split_fallback)
     rows = conn.execute(
         f"""SELECT {bucket} AS period,
                    COUNT(DISTINCT ticket) AS tickets,
@@ -387,13 +432,15 @@ def _pr_events(conn, branches: list, period: str) -> dict:
 
 
 def _by_period_split(conn, period: str, bucket: str, where: str,
-                     params: tuple) -> list:
+                     params: tuple, split_fallback: str | None = None) -> list:
+    skey, sparams = _session_key(split_fallback)
     rows = conn.execute(
-        f"""SELECT {bucket} AS period, ticket,
+        f"""SELECT {bucket} AS period, ticket, {skey} AS split_session,
                    GROUP_CONCAT(DISTINCT branch) AS branches, {_SUMS}
             FROM turns WHERE {where}
-            GROUP BY period, ticket ORDER BY period, ticket""",
-        params).fetchall()
+            GROUP BY period, ticket, split_session
+            ORDER BY period, ticket, first_seen""",
+        sparams + params).fetchall()
     events_by_ticket: dict = {}
     out = []
     for r in rows:
@@ -405,6 +452,8 @@ def _by_period_split(conn, period: str, bucket: str, where: str,
         d = _row(r, period=r["period"], ticket=r["ticket"])
         d["pr_events"] = "; ".join(
             events_by_ticket[r["ticket"]].get(r["period"], []))
+        if split_fallback:
+            _with_session_facts(conn, d, r["split_session"])
         out.append(d)
     return out
 
@@ -508,7 +557,7 @@ def render_tickets(rows: list, window: str, notes: str,
         ["ticket", "turns", "sessions", "output", "cache read",
          "cache create", "weighted", "est. USD", "models", "cost shape",
          "idle", "active", "PRs", "last seen"],
-        [[r["ticket"], _n(r["turns"]), _n(r["sessions"]),
+        [[_ticket_label(r), _n(r["turns"]), _n(r["sessions"]),
           _n(r["output_tokens"]), _n(r["cache_read_tokens"]),
           _n(r["cache_creation_tokens"]), _n(r["weighted_tokens"]),
           _usd(r), r.get("models") or "—", _shape(r), _idle(r),
@@ -518,7 +567,8 @@ def render_tickets(rows: list, window: str, notes: str,
     note = notes.rstrip("\n")
     if note:
         parts += [note, ""]
-    parts += [f"**{len(rows)} ticket(s) · {_n(weighted)} weighted tokens "
+    tickets = len({r["ticket"] for r in rows})
+    parts += [f"**{tickets} ticket(s) · {_n(weighted)} weighted tokens "
               f"({_n(total)} raw)**", "", body, "",
               _FOOTNOTE]
     return "\n".join(parts)
@@ -545,6 +595,17 @@ def render_drilldown(ticket: str, rows: list, window: str, notes: str) -> str:
     lead = (f"**{len(rows)} session(s) · {_n(weighted)} weighted tokens "
             f"({_n(total)} raw)** · branch(es): {', '.join(branches) or '—'}")
     return "\n".join([head, "", lead, "", body, "", _FOOTNOTE])
+
+
+def _ticket_label(r: dict) -> str:
+    """The ticket cell: a ticket id, or `unassigned: <title>` for one session.
+
+    `--unassigned sessions` splits the fallback bucket by session; the session
+    id prefix keeps two untitled sessions from reading as one.
+    """
+    if not r.get("session_id"):
+        return r["ticket"]
+    return f"{r['ticket']}: {_title(r)} ({r['session_id'][:8]})"
 
 
 def _title(r: dict) -> str:
@@ -584,7 +645,7 @@ def render_periods(rows: list, period: str, window: str, notes: str,
     cols += ["output", "cache read", "weighted", "est. USD", "raw total",
              "active"] + (["PR events"] if split else [])
     body = _table(cols, [
-        [r["period"] or "—"] + ([r["ticket"]] if split else [])
+        [r["period"] or "—"] + ([_ticket_label(r)] if split else [])
         + [_n(r["turns"]), _n(r["sessions"])]
         + ([] if ticket or split else [_n(r["tickets"])])
         + [_n(r["output_tokens"]), _n(r["cache_read_tokens"]),
@@ -695,6 +756,10 @@ def main() -> int:
     p.add_argument("--project", default=None, help="limit to one project")
     p.add_argument("--split", default=None, choices=["ticket"],
                    help="with --by: one row per period per ticket")
+    p.add_argument("--unassigned", default="bucket", choices=UNASSIGNED_MODES,
+                   help="show work on branches with no ticket as one "
+                        "`unassigned` row (bucket, the default) or as one "
+                        "row per session, named by its title (sessions)")
     p.add_argument("--include-text", action="store_true",
                    help="put session titles and first prompts in csv/json "
                         "exports (they can hold sensitive text)")
@@ -708,18 +773,23 @@ def main() -> int:
     notes = _notes(bad)
     window = _window(args.since, args.until, bad)
 
+    cfg = config.load(os.getcwd())
+    split_fallback = (cfg["fallback"] if args.unassigned == "sessions"
+                      else None)
+
     db.init_db(args.data_dir)
     conn = db.connect(args.data_dir)
     try:
         if args.by:
             rows = by_period(conn, args.by, since, until, args.project,
-                             args.ticket, split=args.split == "ticket")
+                             args.ticket, split=args.split == "ticket",
+                             split_fallback=split_fallback)
         elif args.ticket:
             rows = for_ticket(conn, args.ticket, since, until, args.project)
         else:
-            rows = by_ticket(conn, since, until, args.project)
-        person = (os.environ.get("BTT_PERSON")
-                  or config.load(os.getcwd()).get("person"))
+            rows = by_ticket(conn, since, until, args.project,
+                             split_fallback=split_fallback)
+        person = os.environ.get("BTT_PERSON") or cfg.get("person")
         print(render(rows, args.format, ticket=args.ticket, window=window,
                      notes=notes, project=args.project, period=args.by,
                      meta=export_meta(person, since, until),

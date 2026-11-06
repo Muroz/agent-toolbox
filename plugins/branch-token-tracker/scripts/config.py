@@ -124,3 +124,33 @@ def ticket_for(branch: str | None, cfg: dict | None = None,
         if found:
             return found.upper() if cfg["uppercase"] else found
     return cfg["fallback"]
+
+
+def main(argv: list | None = None) -> int:
+    """`btt ticket [branch ...]`: show the ticket each branch name files under.
+
+    With no branch, it uses the one checked out in the working directory. It
+    applies the same config the hooks would here, `$BTT_PATTERN` included, so
+    it is the way to try a pattern before committing it.
+    """
+    import subprocess
+    import sys
+
+    branches = list(sys.argv[1:] if argv is None else argv)
+    if not branches:
+        try:
+            out = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True, timeout=5)
+            current = out.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            current = ""
+        branches = [current if current and current != "HEAD" else ""]
+    cfg = load(os.getcwd())
+    for branch in branches:
+        print(f"{branch or '(no branch)'} -> {ticket_for(branch or None, cfg)}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

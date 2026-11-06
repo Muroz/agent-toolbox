@@ -29,7 +29,9 @@ import glob
 import os
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 
+import config
 import db
 import ingest
 import transcript
@@ -82,6 +84,7 @@ def backfill(conn: sqlite3.Connection, verbose: bool = False) -> dict:
     stats = {"sessions": 0, "skipped_no_transcript": 0, "added": 0, "updated": 0}
     sessions = [r[0] for r in conn.execute(
         "SELECT DISTINCT session_id FROM turns ORDER BY session_id")]
+    purged = db.purged_ids(conn)
 
     for session_id in sessions:
         path = find_transcript(session_id)
@@ -99,6 +102,9 @@ def backfill(conn: sqlite3.Connection, verbose: bool = False) -> dict:
         added = updated = 0
 
         turns, meta = transcript.parse_session(path)
+        # `_attribute` would hand a purged turn the ticket of its nearest
+        # stored neighbour, so purged ids are skipped, not re-derived.
+        turns = [t for t in turns if t.turn_id not in purged]
         repo = ingest.current_repo(meta.cwd)
         # Billing is left unknown: today's environment says nothing about the
         # one the session ran under.
@@ -177,17 +183,76 @@ def backfill(conn: sqlite3.Connection, verbose: bool = False) -> dict:
     return stats
 
 
+def purge(conn: sqlite3.Connection, ticket: str, *, apply: bool,
+          backup_dir: Path | None = None) -> dict:
+    """Delete every turn stored under `ticket`, leaving its id as a tombstone.
+
+    Meant for the fallback bucket (`unassigned`). Sessions left with no turns
+    lose their row too, which is where titles and first prompts live. With
+    `apply` false it only counts. With it true, it first copies the database
+    beside itself, because nothing can rebuild a purged turn: capture and
+    backfill both skip tombstoned ids on purpose.
+    """
+    where = "ticket = ?"
+    turns, sessions = conn.execute(
+        f"SELECT COUNT(*), COUNT(DISTINCT session_id) FROM turns WHERE {where}",
+        (ticket,)).fetchone()
+    orphaned = conn.execute(
+        f"""SELECT COUNT(*) FROM (SELECT DISTINCT session_id FROM turns
+                                  WHERE {where}) s
+            WHERE NOT EXISTS (SELECT 1 FROM turns o
+                              WHERE o.session_id = s.session_id
+                                AND o.ticket IS NOT ?)""",
+        (ticket, ticket)).fetchone()[0]
+    stats = {"ticket": ticket, "turns": turns, "sessions": sessions,
+             "sessions_removed": orphaned, "backup": None}
+    if not apply or not turns:
+        return stats
+
+    if backup_dir is not None:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = backup_dir / f"tokens.db.bak-{stamp}"
+        dst = sqlite3.connect(target)
+        try:
+            conn.backup(dst)
+        finally:
+            dst.close()
+        stats["backup"] = str(target)
+
+    now = datetime.now(timezone.utc).isoformat()
+    with conn:
+        conn.execute(
+            f"""INSERT OR IGNORE INTO purged_turns (turn_id, purged_at)
+                SELECT turn_id, ? FROM turns WHERE {where}""", (now, ticket))
+        doomed = [r[0] for r in conn.execute(
+            f"SELECT DISTINCT session_id FROM turns WHERE {where}", (ticket,))]
+        conn.execute(f"DELETE FROM turns WHERE {where}", (ticket,))
+        conn.executemany(
+            """DELETE FROM sessions WHERE session_id = ? AND NOT EXISTS
+                   (SELECT 1 FROM turns WHERE turns.session_id = ?)""",
+            [(s, s) for s in doomed])
+    return stats
+
+
 def main(argv: list | None = None) -> int:
     parser = argparse.ArgumentParser(description="Repair the token store.")
     sub = parser.add_subparsers(dest="cmd", required=True)
     bf = sub.add_parser("backfill", help="re-derive turns from transcripts")
     bf.add_argument("--data-dir", default=None)
     bf.add_argument("--quiet", action="store_true")
+    pu = sub.add_parser(
+        "purge-unassigned",
+        help="delete the turns stored under the fallback ticket")
+    pu.add_argument("--yes", action="store_true",
+                    help="actually delete; without it, only report counts")
+    pu.add_argument("--data-dir", default=None)
     args = parser.parse_args(argv)
 
     db.init_db(args.data_dir)
     conn = db.connect(args.data_dir)
     try:
+        if args.cmd == "purge-unassigned":
+            return _purge_cli(conn, args)
         stats = backfill(conn, verbose=not args.quiet)
     finally:
         conn.close()
@@ -195,6 +260,26 @@ def main(argv: list | None = None) -> int:
           f"re-read, {stats['added']} turn(s) added, "
           f"{stats['updated']} refreshed, "
           f"{stats['skipped_no_transcript']} skipped (no transcript).")
+    return 0
+
+
+
+def _purge_cli(conn: sqlite3.Connection, args) -> int:
+    ticket = config.load(os.getcwd())["fallback"]
+    stats = purge(conn, ticket, apply=args.yes,
+                  backup_dir=db.data_dir(args.data_dir))
+    what = (f"{stats['turns']} turn(s) across {stats['sessions']} session(s) "
+            f"under {ticket!r}; {stats['sessions_removed']} session(s) have no "
+            "other turns and lose their title and first prompt")
+    if not stats["turns"]:
+        print(f"[branch-token-tracker] nothing stored under {ticket!r}.")
+    elif not args.yes:
+        print(f"[branch-token-tracker] would purge {what}.\n"
+              "Run again with --yes to delete. It backs the database up first; "
+              "the deleted turns are never captured again.")
+    else:
+        print(f"[branch-token-tracker] purged {what}.\n"
+              f"Backup: {stats['backup']}")
     return 0
 
 

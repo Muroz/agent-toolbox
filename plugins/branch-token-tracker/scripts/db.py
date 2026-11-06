@@ -88,7 +88,7 @@ def connect(explicit_dir: str | None = None) -> sqlite3.Connection:
     return conn
 
 
-SCHEMA_VERSION = "3"
+SCHEMA_VERSION = "4"
 
 # Columns added after a database may already exist. `CREATE TABLE IF NOT EXISTS`
 # is a no-op on an existing table, so without this an upgrade silently keeps the
@@ -139,6 +139,14 @@ def _migrate(conn: sqlite3.Connection) -> list:
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (SCHEMA_VERSION,))
     conn.commit()
     return applied
+
+
+def purged_ids(conn: sqlite3.Connection) -> set:
+    """Turn ids `btt purge-unassigned` deleted, which must never come back."""
+    try:
+        return {r[0] for r in conn.execute("SELECT turn_id FROM purged_turns")}
+    except sqlite3.Error:  # a store from before schema 4
+        return set()
 
 
 def write_turn_detail(conn: sqlite3.Connection, t, repo: str | None) -> None:

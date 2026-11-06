@@ -96,6 +96,15 @@ CREATE TABLE IF NOT EXISTS prs (
 
 CREATE INDEX IF NOT EXISTS idx_prs_branch ON prs(branch);
 
+-- Turns deleted by `btt purge-unassigned`. Capture and backfill re-insert any
+-- transcript turn whose id they have not stored, under whatever branch is
+-- checked out then, so without these ids a resumed session would bill its
+-- purged turns to a ticket. Ids only: nothing here says what the turn was.
+CREATE TABLE IF NOT EXISTS purged_turns (
+  turn_id    TEXT PRIMARY KEY,
+  purged_at  TEXT NOT NULL
+);
+
 -- Schema bookkeeping so an existing database can be migrated forward; see db.py.
 CREATE TABLE IF NOT EXISTS schema_meta (
   key   TEXT PRIMARY KEY,

@@ -172,6 +172,12 @@ def capture(conn, session_id: str, transcript_path: str, *, project: str | None,
     seen = {r[0] for r in conn.execute("SELECT turn_id FROM turns")}
     written = 0
     turns, meta = transcript.parse_session(transcript_path)
+    # A purged turn stays purged. Without this, the next Stop would re-insert
+    # it under whatever branch is checked out now, billing it to a ticket.
+    purged = db.purged_ids(conn)
+    turns = [t for t in turns if t.turn_id not in purged]
+    if not turns:
+        return 0  # nothing left to store, so no session row either
     db.upsert_session(conn, session_id, meta, project=project, repo=repo,
                       billing=billing[0], billing_source=billing[1],
                       now=datetime.now(timezone.utc).isoformat())
