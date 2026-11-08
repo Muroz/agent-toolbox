@@ -36,11 +36,12 @@ claude plugin marketplace add /path/to/agent-toolbox
 claude plugin install perf-tracker@agent-toolbox
 ```
 
-To pick up later changes, run `claude plugin marketplace update agent-toolbox`.
+To pick up a new version, see
+[Refresh the installed copy](#refresh-the-installed-copy).
 
 > **Warning:** `claude plugin uninstall` deletes the plugin's data directory
-> along with the plugin. Both trackers keep months of capture there. Back the
-> database up first. See each plugin's README.
+> along with the plugin. Both trackers keep months of data there. Back up the
+> database first: each plugin's README gives the command.
 
 ## Personal preferences
 
@@ -74,7 +75,7 @@ options and for why these are rules rather than a plugin.
 
 ### Iterate without installing
 
-This is the fastest loop. Claude Code loads the plugin straight from the working
+This is the fastest way to try a change. Claude Code loads the plugin straight from the working
 tree for one session and picks up your latest edits on each launch, with no
 reinstall and no cache:
 
@@ -86,8 +87,8 @@ Repeat the flag for more than one plugin: `--plugin-dir A --plugin-dir B`.
 
 ### Refresh the installed copy
 
-The marketplace caches a snapshot of the plugin at its `version`, so
-`claude plugin update` does nothing while the version is unchanged. Bump
+Claude Code installs a copy of the plugin pinned to its `version`, so
+`claude plugin update` does nothing while the version stays the same. Bump
 `version` in the plugin's `plugin.json`. Leave the `marketplace.json` entry
 without one: the manifest wins, and declaring both draws a validate warning.
 Then:

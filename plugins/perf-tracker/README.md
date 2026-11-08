@@ -1,8 +1,8 @@
 # perf-tracker
 
-A Claude Code plugin that qualifies good agent usage and compares approaches on
-cost per successful outcome, where cost means tokens, time and prompts. It
-captures and prepares usage information so that you can answer two questions:
+A Claude Code plugin that measures how well you use agents and compares
+approaches on cost per successful outcome, where cost means tokens, time and
+prompts. It records your sessions so you can answer two questions:
 
 1. **Am I using agents well?** And is the model drifting over time?
 2. **Which approach is better for this kind of task?** Which model, permission
@@ -10,8 +10,8 @@ captures and prepares usage information so that you can answer two questions:
    and prompt cost.
 
 The plugin reconstructs everything from the session transcripts Claude Code
-already writes to `~/.claude/projects/`. No external services, no daemon, no
-runtime dependencies.
+already writes to `~/.claude/projects/`. It needs no external service, no
+daemon and no runtime dependencies.
 
 ---
 
@@ -22,11 +22,12 @@ runtime dependencies.
 /plugin install perf-tracker@agent-toolbox
 ```
 
-Capture starts immediately. Then pick the flow that matches what you want.
+Capture starts with your next session. Then pick the flow that matches what
+you want.
 
 > **Warning:** `claude plugin uninstall` deletes `${CLAUDE_PLUGIN_DATA}`, the
 > whole directory, including `usage.db` and anything else kept beside it. Months
-> of capture go with it. Back the database up outside that directory first:
+> of data go with it. Back up the database outside that directory first:
 >
 > ```bash
 > cp ~/.claude/plugins/data/perf-tracker-*/usage.db ~/usage.db.bak
@@ -103,7 +104,7 @@ directly:
 
 ```bash
 SID="$CLAUDE_CODE_SESSION_ID"     # skills pass this so capture is per session
-cpt track start  --session-id "$SID" --label "…" --type feature --size M --approach "plan-mode, opus-4-8"
+cpt track start  --session-id "$SID" --label "…" --type feature --size M --approach "plan-mode, opus-5-5"
 cpt track pause  --session-id "$SID"
 cpt track resume --session-id "$SID" --run "<run-id-or-label>"
 cpt track done   --session-id "$SID" --outcome success --satisfaction 4   # or --run <id>
@@ -124,25 +125,25 @@ cpt eval reconcile --run-id <run_id>           # disagreement across judge passe
 
 ## Core concepts
 
-**Run**
+### Run
 
 The unit of analysis: a bounded stretch of work with one cost summary, one
 approach and one outcome. `run_id` is session-independent, so a run can own
 turns from several sessions.
 
-- **Passive run.** Opened automatically per session, with an inferred outcome.
-  Zero effort, always on. It answers where you stand and whether the model is
-  drifting.
-- **Tracked run.** Bracketed deliberately with `/track` and `/track-done`, with
-  a self-reported outcome. This is the instrument for controlled comparisons
-  between approach A and approach B.
+- **Passive run:** the plugin opens one for every session and infers its
+  outcome. It needs nothing from you and answers where you stand and whether
+  the model is drifting.
+- **Tracked run:** you open it with `/track`, close it with `/track-done` and
+  report the outcome yourself. Use it to compare one approach with another
+  under the same conditions.
 
-**Turn**
+### Turn
 
 One user prompt and the assistant work that answered it. This is the atomic
 capture unit, and runs aggregate their turns.
 
-**The three scoring layers**
+### The three scoring layers
 
 1. **Deterministic metrics**, always on: tokens, time, prompts, tool calls,
    output lines of code, friction signals, context-window pressure.
@@ -152,11 +153,11 @@ capture unit, and runs aggregate their turns.
 3. **LLM judge**, opt-in and batched: the `usage-evaluator` subagent scores an
    agent-behavior rubric and per-prompt quality.
 
-**Comparison**
+### Comparison
 
 The plugin ranks approaches within buckets of task type and size, on median cost
 per successful run, with a small-sample guard so it will not rank an approach on
-too few runs. Cheap but failed is never rewarded.
+too few runs. A cheap run that failed never ranks well.
 
 ---
 
@@ -164,23 +165,24 @@ too few runs. Cheap but failed is never rewarded.
 
 ### Cost is weighted tokens
 
-Summing the four token classes is not a cost. Cache reads bill at 0.1x input,
-cache writes at 1.25x for a 5-minute TTL or 2x for an hour, and output at 5x. On
-a real session the raw sum is about 95% cache reads. Ranking on it makes a run
+Summing the four token classes doesn't give a cost. Cache reads bill at a tenth
+of the input rate, cache writes at 1.25 times for a 5-minute TTL or 2 times for
+an hour and output at 5 times. On a real session the raw sum is about 95% cache reads. Ranking on it makes a run
 that reuses a long cached prefix look far more expensive than one that rebuilds
 context from scratch, which is the opposite of the truth.
 
 Every ranking therefore uses weighted tokens, the input-equivalent units in
-`scripts/cost.py`. The 5x output multiplier holds for every current model, so
+`scripts/cost.py`. The 5 times output multiplier holds for every current model, so
 weighted tokens are comparable across models. Converting to dollars needs the
 per-model input price, and models absent from the table report `—` rather than a
-guess. The dollar figure prices cache reads at 0.1x input, which overstates
-models that read cache for less: Opus 5.5 at 0.05x and Fable 5.1 at 0.025x.
+guess. The dollar figure prices cache reads at a tenth of input, which
+overstates models that read cache for less: Opus 5.5 at a twentieth and Fable 5.1
+at a fortieth.
 
-Time is reported two ways for the same reason. `active_ms` sums each turn's span
-with individual idle gaps capped at 5 minutes, and is what the rankings use.
-`wall_clock_ms` is the raw calendar span, which on real data produced 250-hour
-runs and is not a cost.
+The plugin records time two ways for the same reason. `active_ms` sums each
+turn's span, counting each idle gap as 5 minutes at most, and the rankings use
+it. `wall_clock_ms` is the raw calendar span. On real data it produced 250-hour
+runs, so it isn't a cost.
 
 ### Where the data comes from
 
@@ -194,11 +196,11 @@ no migration.
 | Hook | Role |
 |------|------|
 | `SessionStart` | Sets up and migrates the database, which is safe to run repeatedly, opens the session's passive run and sweeps runs abandoned by a crash. |
-| `Stop` | Does the main work: parses the transcript, inserts new turns and refreshes existing envelopes. |
-| `SessionEnd` | Closes the passive run: aggregates turns, computes the signal summary, infers the outcome. |
+| `Stop` | Parses the transcript, inserts new turns and refreshes the token counts of stored ones. |
+| `SessionEnd` | Closes the passive run: totals its turns, computes the signal summary and infers the outcome. |
 
-There is deliberately no `SubagentStop` hook and no `UserPromptSubmit` hook. See
-[CHANGELOG.md](CHANGELOG.md) for why each was removed.
+The plugin has no `SubagentStop` or `UserPromptSubmit` hook.
+[CHANGELOG.md](CHANGELOG.md) says why it dropped each one.
 
 Hooks never block the session. On any error they exit 0 and do nothing. Set
 `CPT_DEBUG=1` to print the traceback instead, so you can tell a plugin that has
@@ -238,7 +240,7 @@ setting is harmless when pyenv is not installed.
   `agent:<agentId>`. A backgrounded agent's launch result carries no usage; it
   reports back later in a `<task-notification>` with only an aggregate total,
   which the plugin stores separately in `total_tokens_agg` and keeps out of the
-  weighted-cost maths rather than guessing at.
+  weighted cost rather than guessing how it splits.
 - That notification arrives on three different record shapes: `type=user`,
   `type=attachment` and `type=queue-operation`. The parser scans all three.
 - A subagent's real envelope comes from its own transcript, at
@@ -248,15 +250,15 @@ setting is harmless when pyenv is not installed.
   plugin ranks the evidence, preferring the agent's own log over a tool result
   over a bare aggregate, and better evidence replaces the earlier figure rather
   than adding to it, since it measures the same spend more precisely.
-- `effort` is read from the top level of each assistant record, so
+- The parser reads `effort` from the top level of each assistant record, so
   `--by effort` works.
 - Each turn also records why it cost what it did: `api_calls` (distinct
   `message.id`s), `peak_context_tokens` and `mean_context_tokens` (input plus
   cache read plus cache write per call), `tool_result_chars` (tool output text
   fed back), `idle_gaps` and `idle_ms` (gaps of over 5 minutes between calls,
   including the one before a turn's first call) and `cold_cache_write_tokens`
-  (the cache writes made by the call after each gap). Turns captured before
-  these existed hold NULL, meaning unknown.
+  (the cache writes made by the call after each gap). Older turns hold NULL in
+  these columns, meaning unknown.
 
 ### Attribution is pinned, the envelope is not
 
@@ -266,8 +268,8 @@ run was active at that `Stop`, and never rewrites its `run_id`, `session_id` or
 never relabels earlier turns.
 
 The token envelope, by contrast, refreshes on every pass, taking the larger of
-the stored and the freshly parsed value per column. Without that, a turn caught
-mid-flight would keep a fraction of its real tokens forever. Because counts only
+the stored and the freshly parsed value per column. Without that, a turn
+captured while still running would keep a fraction of its real tokens forever. Because counts only
 ever grow, a re-parse of a compacted transcript can never shrink one either. The
 whole pass is safe to repeat because `turn_id` is the primary key.
 
@@ -278,22 +280,22 @@ session in the `active_tracked` table, keyed by `session_id`, which the skills
 read from `$CLAUDE_CODE_SESSION_ID`. The `Stop` hook prefers this session's
 active tracked run over its passive run, so turns produced while tracking attach
 to the tracked run. Because attribution is per session, two sessions can track
-different tasks in parallel without contaminating each other.
+different tasks in parallel without mixing their turns.
 
 A tracked run has three states:
 
-- **active(session)** — a row in `active_tracked`; this session's turns attach
-  to it.
-- **paused** — open in `runs`, with no `ended_at` or outcome, but absent from
-  `active_tracked`. It receives no turns and is resumable.
-- **done** — finalized by `/track-done`, and terminal.
+- **Active:** a row in `active_tracked` ties it to one session, and that
+  session's turns attach to it.
+- **Paused:** open in `runs`, with no `ended_at` or outcome, but absent from
+  `active_tracked`. It receives no turns, and you can resume it.
+- **Done:** `/track-done` finalized it. A done run never reopens.
 
 `/track-pause` detaches this session's active run and keeps it open.
 `/track-resume <id|label>` reattaches a paused run to the current session,
 possibly a different session from where it started, so you can pause a task in
 one session and finish it in another. `SessionEnd` auto-pauses the session's
-active run, detaching rather than finalizing, so the run survives as resumable
-instead of being left open in a session that has ended. Only `/track-done`
+active run, detaching rather than finalizing, so you can still resume the run
+after its session ends. Only `/track-done`
 finalizes a run, defaulting to this session's active run, or taking
 `--run <id>` to close a paused one directly. Starting or resuming while already
 tracking auto-pauses the previous run, so nothing is lost. `/track-list` shows
@@ -318,29 +320,28 @@ run that share a session get separate summaries:
 | Context | `peak_context_tokens` (the raw maximum of input plus cache tokens, the assumption-free figure) and `peak_context_pct` against a window the transcript never states: set `CPT_CONTEXT_WINDOW` to declare it, otherwise 200k, escalating to 1M only if the observed peak exceeds it |
 
 A prompt that never got a reply, usually `/clear`, produces no row in `turns`,
-so the plugin carries its bundle forward to the run of the nearest preceding
-turn rather than dropping it. Without that, `clear_count` was structurally
-pinned at zero.
+so the plugin carries its signals forward to the run of the nearest earlier
+turn rather than dropping them. That is what lets `clear_count` count `/clear`
+commands at all.
 
 Lines of code come only from `structuredPatch`. Read results carry a `filePath`
-but no patch, so they never count as output. `effort` is left null: it is not in
-the transcript and will arrive with the OpenTelemetry upgrade.
+but no patch, so they never count as output.
 
 ### Inferred outcome (`infer_outcome.py`)
 
 Passive runs get a rough outcome from deterministic signals, namely positive and
-negative cues in prompts, interrupts, re-prompts and whether any output was
-produced, through a documented six-step decision. The plugin stores it with
+negative cues in prompts, interrupts, re-prompts and whether the run produced
+any output, through the six-step decision in `infer_outcome.py`. The plugin stores it with
 `outcome_source='inferred'` and saves the signals as JSON in `inferred_signals`
-so you can audit the result. When the signals are not clear enough, the outcome
-is `unknown`. The comparison ranking never mixes inferred outcomes with
+so you can audit the result. When the signals are not clear enough, it stores
+`unknown`. The comparison ranking never mixes inferred outcomes with
 self-reported ones: the compare view uses `self_report` only.
 
 ### Qualitative scoring (`evaluate.py` and `usage-evaluator`)
 
 `/evaluate-run` picks its targets, either a run id or recent runs not yet
-judged, gathers the context of transcripts, per-turn prompts and the rubric, and then
-hands it to the `usage-evaluator` subagent, which runs on Haiku at low effort
+judged, gathers the transcripts, per-turn prompts and the rubric and then
+hands them to the `usage-evaluator` subagent, which runs on Haiku at low effort
 and returns a structured verdict. The plugin then saves one `judge_verdicts` row
 plus detailed `scores` rows.
 
@@ -359,8 +360,8 @@ default, and verification is opt-in.
 ### Reporting (`report.py`)
 
 The plugin computes all numbers at read time from the raw `runs`, `turns` and
-`scores` tables. Nothing is pre-aggregated, so any new report or exporter is
-just another query.
+`scores` tables. It stores no totals, so any new report or exporter is just
+another query.
 
 - `overview` — totals, plus by-model, by-project, by-day and by-query-source
   when subagents ran.
@@ -370,9 +371,9 @@ just another query.
   approach for a given task type and size, or the best per bucket. The plugin
   surfaces this automatically at `/track` time.
 - `antipatterns` — recurring friction across runs, worst first, with the share
-  landing in a bad outcome and where each clusters. Friction signals with no
-  matching rubric dimension are flagged as candidates to add, turning incidents
-  into evaluation criteria. It also reports the weakest prompt habits.
+  landing in a bad outcome and where each clusters. It flags friction signals
+  with no matching rubric dimension as candidates to add, so a recurring
+  problem becomes something the judge scores. It also reports the weakest prompt habits.
 - `degradation` — the efficiency and friction trend per model and period, plus
   the average judge score.
 - `run <id>` — the full scorecard for one run, including the judge verdict and
@@ -434,7 +435,7 @@ flowchart TD
 ## The data model
 
 One SQLite database at `${CLAUDE_PLUGIN_DATA}/usage.db`, which is
-`~/.claude/plugins/data/perf-tracker/usage.db`:
+`~/.claude/plugins/data/perf-tracker-<marketplace>/usage.db`:
 
 | Table | Purpose |
 |-------|---------|
@@ -464,7 +465,7 @@ python3 -m unittest discover -s tests
 
 ### Iterate without reinstalling
 
-This is the fastest loop. Claude Code loads the plugin straight from the working
+This is the fastest way to try a change. Claude Code loads the plugin straight from the working
 tree for one session and picks up your edits on each launch:
 
 ```bash
@@ -473,14 +474,14 @@ claude --plugin-dir /path/to/agent-toolbox/plugins/perf-tracker
 
 ### Refresh the installed copy
 
-The marketplace caches a snapshot at the plugin's `version`, so
-`claude plugin update` does nothing while the version is unchanged. Bump
-`version` in both `plugin.json` and the marketplace entry, then run
+Claude Code installs a copy of the plugin pinned to its `version`, so
+`claude plugin update` does nothing while the version stays the same. Bump
+`version` in `.claude-plugin/plugin.json` only, then run
 `claude plugin marketplace update` followed by `claude plugin update`. Prefer
 this over uninstalling and reinstalling, which deletes your data directory.
 
-`cpt` lands on `PATH` only in a new session after install. The skills include a
-cache-glob fallback for when it is not yet found.
+`cpt` lands on `PATH` only in a new session after install. Until then, the
+skills find the launcher in the plugin cache instead.
 
 ### Repair an existing store
 
@@ -545,7 +546,7 @@ perf-tracker/
 
 **Why a plugin rather than the alternatives**
 
-The capability is inherently multi-component. It needs hooks to capture, skills
+The tracker has several parts. It needs hooks to capture, skills
 to track, report and evaluate, a subagent to judge, plus shared scripts and
 shared storage. The plugin is what lets those parts behave as one thing.
 
@@ -561,8 +562,8 @@ Compared with wiring up raw skills, hooks and a subagent separately:
   `settings.json` by hand, copying a subagent and symlinking skills is
   error-prone and leaves orphans behind. `claude plugin install` and
   `uninstall` are atomic.
-- Auto-namespacing as `/perf-tracker:track` avoids collisions with
-  your other skills.
+- Claude Code namespaces the skills as `/perf-tracker:track`, so they can't
+  collide with your other skills.
 - A marketplace can distribute it, each plugin installs individually, and future
   pieces install alongside it.
 
@@ -610,7 +611,7 @@ guard keeps it honest.
 
 ## Roadmap
 
-Foundations are laid for each, and none requires a rewrite.
+Each builds on what exists today, and none requires a rewrite.
 
 - **OpenTelemetry receiver**, for precise `cost_usd`, `duration_ms` and
   attribution without re-deriving them.

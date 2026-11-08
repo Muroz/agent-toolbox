@@ -128,9 +128,9 @@ recognizes. Notifications come in three record types, `type=user`,
 `type=attachment` and `type=queue-operation`, which is why they are the weakest
 source.
 
-The plugin can't weight a bare number, because the token classes bill at
-different rates. The plugin stores it in `total_tokens_agg`, where it counts toward the
-raw total and stays out of the weighted figure.
+A bare number can't carry a weight, because the token classes bill at
+different rates. The plugin stores it in `total_tokens_agg`, where it counts
+toward the raw total and stays out of the weighted figure.
 
 ### Weighted tokens compared with raw tokens
 
@@ -162,8 +162,8 @@ Files don't merge with each other. The file found sets the keys it names, and
 the built-in defaults fill in the rest. A repo-level file therefore hides your
 user-level `person` and `billing` unless it repeats them.
 
-The hooks look from the session's working directory. `btt report`,
-`btt purge-unassigned` and `btt report --unassigned sessions` look from the
+The hooks start the search from the session's working directory. `btt ticket`,
+`btt purge-unassigned` and `btt report --unassigned sessions` start it from the
 directory you run them in.
 
 ### Config file keys
@@ -191,15 +191,15 @@ The plugin ignores keys it doesn't know. A `patterns` value that isn't a list,
 or an empty `fallback`, gets the default instead. A `billing` value other than
 `api` or `subscription` counts as unset.
 
-Changing `fallback` affects new turns only. Turns already stored keep the name
-the plugin stored them under, so `btt report` shows both names until you purge the old
-one or it ages out of your windows.
+Changing `fallback` affects new turns only. Stored turns keep the name they went in
+under, so `btt report` shows both names until you purge the old one or it ages
+out of your windows.
 
 ### Environment variables
 
 | Variable | Read by | What it does |
 | --- | --- | --- |
-| `BTT_CONFIG` | hooks, `btt` | Path of the config file. Beats both file lookups. If the file can't be read, the lookup carries on. |
+| `BTT_CONFIG` | hooks, `btt` | Path of the config file. Beats both file lookups. If the plugin can't read the file, it tries the next place. |
 | `BTT_PATTERN` | hooks, `btt ticket` | One regex that replaces `patterns` from any file. |
 | `BTT_PERSON` | `btt report` | Beats `person` from the config file. |
 | `BTT_DEBUG` | hooks | Set to `1` to print hook errors to stderr instead of discarding them. |
@@ -228,9 +228,9 @@ whole match when it doesn't.
 The defaults keep the `#` in `#883`, so a GitHub issue never collides with a
 bare number from another scheme.
 
-Nothing in this path can raise an error. A malformed regex, an unreadable config
-file, a detached HEAD or a directory outside a repo all give the fallback. This
-code runs inside a hook, and a loud failure would interrupt your work.
+Ticket lookup never raises an error. A malformed regex, an unreadable config
+file, a detached HEAD or a directory outside a repo all give the fallback. The
+lookup runs inside a hook, and a loud failure would interrupt your work.
 
 To see which ticket a branch files under, with the config that applies in the
 current directory, run `btt ticket`:
@@ -250,8 +250,8 @@ main -> unassigned
 The default patterns assume ids that end in digits. ClickUp ids don't:
 `CU-86e31q7e3` is base 36. The default JIRA pattern matches the prefix and stops
 at the first letter, so the plugin files a branch called
-`Add-target-count-CU-86e31q7e3` under `CU-86`. Two tasks can shorten to the same id, and their merged row
-looks like a valid total. A `.branch-tokens.json` at the repo root fixes it:
+`Add-target-count-CU-86e31q7e3` under `CU-86`. Two tasks can shorten to the
+same id, and their merged row looks like a valid total. A `.branch-tokens.json` at the repo root fixes it:
 
 ```json
 {
@@ -288,7 +288,7 @@ Three rules apply to any custom scheme:
   "uppercase": true
   ```
 
-Try a pattern before you commit it. `BTT_PATTERN` replaces the configured
+Try a pattern before you save it. `BTT_PATTERN` replaces the configured
 patterns for one command, and `uppercase` still applies:
 
 ```bash
@@ -385,8 +385,8 @@ Code deletes transcripts after `cleanupPeriodDays`, 30 days by default.
 ### Work with no ticket
 
 A turn on a branch that no pattern matches goes under the fallback ticket,
-`unassigned` unless you renamed it. You have three ways to see what that work
-was.
+`unassigned` unless you renamed it. You can see what that work was in two ways,
+or delete it.
 
 `btt report unassigned` lists its sessions, each with a title and repo. The
 title is the one Claude Code gave the session. Claude Code titles interactive
@@ -399,9 +399,13 @@ Each session gets its own row, named `unassigned: <title> (<session id>)` and
 ranked among the tickets by its spend. Real tickets stay one row each, and the
 totals don't change. It also works with `--by <period> --split ticket`. In CSV
 and JSON the `ticket` column still reads `unassigned`, and a `session_id` column
-tells the rows apart.
+tells the rows apart. The titles stay out of an export unless you add
+`--include-text`.
 
-`btt purge-unassigned` deletes the work instead. See
+Without the flag, or with `--unassigned bucket`, the report keeps all such work
+in one row. Capture is the same either way, so you can switch views at any time.
+
+`btt purge-unassigned` deletes the work. See
 [Purging work with no ticket](#purging-work-with-no-ticket).
 
 ### Time ranges
@@ -420,9 +424,9 @@ A bare `--until` date covers the whole day it names, so the closed range above
 includes all of August 15.
 
 Dates and times are local. The plugin stores timestamps in UTC, and the two can
-disagree about which day a late session belongs to: the plugin stores a 9 pm session
-in UTC-3 under the next UTC date. So the plugin reads bounds and buckets in your
-time zone, and `--since 2026-08-01` means your August 1. Relative windows such
+disagree about which day a late session belongs to: a 9 pm session in UTC-3
+falls on the next UTC date. So the plugin reads bounds and buckets in your time
+zone, and `--since 2026-08-01` means your August 1. Relative windows such
 as `30d` don't depend on time zone.
 
 If a bound doesn't parse, the report says so and ignores it. It names each bad
@@ -459,8 +463,8 @@ open overnight adds its real work rather than a day. Capture leaves subagent
 time out, because it runs inside a main turn that already counts those minutes.
 
 `--split ticket` adds a `PR events` column that marks the periods in which a
-ticket's PR opened or merged. That lines spend up against delivery: how much
-went in before the PR opened, and how much after.
+ticket's PR opened or merged, so you can see how much a ticket spent before its
+PR opened and how much after.
 
 ### Pull request outcomes
 
@@ -538,9 +542,9 @@ btt backfill --quiet   # without the per-session lines
 ```
 
 `btt backfill` rebuilds turns from the transcripts still on disk, so it
-recovers spend an older parser couldn't see. Counts only ever grow, running it
-twice changes nothing more and a session whose transcript is gone keeps what was
-captured at the time.
+recovers spend an older parser couldn't see. Counts only ever grow, a second
+run changes nothing and a session whose transcript is gone keeps what capture
+recorded at the time.
 
 It doesn't resolve branches again. The stored ticket is the record of where the
 work ran, and a session can span several branches. A recovered turn takes the

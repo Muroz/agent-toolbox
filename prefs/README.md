@@ -25,7 +25,8 @@ anywhere. On a new machine, clone the repo and run it.
 
 Moving the repo breaks the links. Run `./scripts/prefs.sh status` to see which
 ones dangle, then `install` to repair them. If the clone is temporary and you
-want the rules to outlive it, run `install --copy` instead.
+want the rules to outlive it, run `install --copy` instead. Add `--dry-run` to
+any command to print what it would do without changing anything.
 
 `uninstall` removes only what this repo put there. It keeps anything you edited
 in place rather than overwriting it, and `install` refuses to overwrite such a
