@@ -11,15 +11,17 @@ could not see is recovered rather than lost.
 - `btt report --unassigned sessions` shows work off any ticket as one row per
   session, named by its title, instead of a single `unassigned` row. It also
   works with `--by <period> --split ticket`. Exports keep `unassigned` in the
-  `ticket` column and add `session_id`.
+  `ticket` column and add `session_id`. They leave out session titles unless
+  you pass `--include-text`.
 - `btt ticket [branch ...]` prints the ticket each branch name files under,
   using the config that applies in the current directory. Combine it with
   `BTT_PATTERN` to try a pattern. The README used to suggest
   `BTT_PATTERN=... btt report` for that, which shows nothing new: reports read
   the tickets stored at capture.
-- `btt purge-unassigned` deletes the turns stored under the fallback ticket,
-  after a dry run and a backup. Schema 4 adds a `purged_turns` table, and the
-  hooks and `btt backfill` never re-insert a purged turn.
+- `btt purge-unassigned` prints what it would delete from the fallback ticket.
+  With `--yes` it backs up the database, then deletes those turns and any
+  session rows left with no turns. Schema 4 adds a `purged_turns` table, and
+  the hooks and `btt backfill` never re-insert a purged turn.
 
 ## 0.7.2
 
